@@ -98,6 +98,7 @@ cargo build --release --locked
 ```
 
 결과: `target/release/mabipng-studio.exe`. `build.bat`로도 빌드할 수 있습니다.
+공개 배포용 실행 파일은 `powershell -ExecutionPolicy Bypass -File build-release.ps1`로 빌드합니다. 이 스크립트는 오류 진단 문자열에 포함되는 빌드 머신의 개인 경로를 일반 경로로 치환합니다.
 GUI는 Windows 기본 한글 글꼴을 사용합니다. `assets/app_icon.ico`는 애플리케이션에 사용되는 일반 아이콘 리소스입니다.
 테스트 이미지는 테스트 코드에서 생성하며 외부 이미지 파일에 의존하지 않습니다.
 
