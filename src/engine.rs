@@ -352,8 +352,8 @@ impl Document {
 /// Creates a blank 2-bit picture chat with background index zero and author metadata.
 pub fn new_chat(width: u32, author: &str) -> Result<Document> {
     ensure!(
-        (96..=256).contains(&width),
-        "새 그림대화 너비는 96 이상 256 이하로 입력해 주세요."
+        (1..=256).contains(&width),
+        "새 그림대화 너비는 1 이상 256 이하로 입력해 주세요."
     );
     encode_author(author)?;
     let mut bytes = Vec::new();

@@ -260,8 +260,13 @@ fn new_chat_has_fixed_height_four_colors_zero_indices_and_author_metadata() {
 
 #[test]
 fn new_chat_rejects_out_of_range_widths_and_invalid_authors() {
-    for width in [0, 1, 95, 257, u32::MAX] {
+    for width in [0, 257, u32::MAX] {
         assert!(new_chat(width, "test").is_err(), "width {width}");
+    }
+    for width in [1, 2, 3, 48, 95, 96, 127, 256] {
+        let doc = new_chat(width, "Test").unwrap();
+        assert_eq!(doc.image.dimensions(), (width, 96));
+        assert_eq!(indexed_pixels(&doc).unwrap().len(), width as usize * 96);
     }
     for author in ["", "  ", "(none)", "a\0b", "a\nb", "\u{1f600}"] {
         assert!(new_chat(96, author).is_err(), "author {author:?}");

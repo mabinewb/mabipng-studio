@@ -86,6 +86,24 @@ mod tests {
             resize_existing: false,
         }
     }
+
+    #[test]
+    fn ordinary_batch_conversion_accepts_narrow_widths() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("input.png");
+        let image =
+            engine::document_from_rgba(96, 96, &[40, 80, 120, 255].repeat(96 * 96)).unwrap();
+        std::fs::write(&source, image.bytes).unwrap();
+        let mut settings = options(root.path().join("output"));
+        for width in [1, 96] {
+            settings.width = width;
+            let output = convert_one(&source, &settings).unwrap();
+            assert_eq!(
+                Document::load(&output).unwrap().image.dimensions(),
+                (width, 48)
+            );
+        }
+    }
     #[test]
     fn mixed_inputs_preserve_originals_and_existing_author() {
         let root = tempfile::tempdir().unwrap();

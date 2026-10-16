@@ -65,8 +65,8 @@ impl Frame {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            (128..=256).contains(&self.width) && (48..=96).contains(&self.height),
-            "출력 크기는 가로 128~256, 세로 48~96픽셀이어야 합니다."
+            (1..=256).contains(&self.width) && (48..=96).contains(&self.height),
+            "출력 크기는 가로 1~256, 세로 48~96픽셀이어야 합니다."
         );
         ensure!(
             self.scale.is_finite()
@@ -284,6 +284,32 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrow_canvases_render_in_every_palette_mode() {
+        let source = engine::new_chat(256, "Test").unwrap();
+        let settings = Settings {
+            author: Some("Test".into()),
+            ..Default::default()
+        };
+        for width in [1, 2, 3, 48, 95, 96, 127] {
+            let mut frame = Frame::new(&source);
+            frame.set_size(width, 48);
+            frame.fit(source.image.dimensions(), false);
+            for mode in [
+                PaletteMode::Keep,
+                PaletteMode::Adaptive,
+                PaletteMode::Default,
+            ] {
+                let doc = frame.render(&source, mode, &settings).unwrap();
+                assert_eq!(doc.image.dimensions(), (width, 48));
+                assert_eq!(
+                    engine::indexed_pixels(&doc).unwrap().len(),
+                    width as usize * 48
+                );
+            }
+        }
+    }
 
     #[test]
     fn smooth_downscale_filters_aliasing_and_composites_alpha_before_filtering() {

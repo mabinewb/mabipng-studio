@@ -110,7 +110,7 @@ impl Studio {
         let mut frame = Frame::new(&source);
         if target.is_some() {
             frame.set_size(
-                source.image.width().clamp(128, 256),
+                source.image.width().clamp(1, 256),
                 source.image.height().clamp(48, 96),
             );
             frame.scale = 1.0;
@@ -303,7 +303,7 @@ impl Studio {
                             let mut h = dialog.frame.height;
                             ui.horizontal(|ui| {
                                 ui.label("너비");
-                                ui.add(egui::DragValue::new(&mut w).range(128..=256).suffix(" px"));
+                                ui.add(egui::DragValue::new(&mut w).range(1..=256).suffix(" px"));
                                 ui.label("높이");
                                 ui.add(egui::DragValue::new(&mut h).range(48..=96).suffix(" px"));
                             });
@@ -311,7 +311,7 @@ impl Studio {
                                 .selected_text("크기 프리셋")
                                 .width(236.0)
                                 .show_ui(ui, |ui| {
-                                    for (pw, ph) in [(128, 48), (192, 72), (256, 96)] {
+                                    for (pw, ph) in [(96, 96), (128, 48), (192, 72), (256, 96)] {
                                         if ui
                                             .selectable_label(
                                                 w == pw && h == ph,

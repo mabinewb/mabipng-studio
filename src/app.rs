@@ -514,7 +514,7 @@ impl Studio {
 
     pub fn start_new(&mut self, ctx: &egui::Context, width: u32) {
         if let Err(error) = self.create_blank(ctx, width, &self.author.clone()) {
-            self.new_width = width.clamp(96, 256);
+            self.new_width = width.clamp(1, 256);
             self.open_new_dialog();
             self.new_error = Some(error);
         }
@@ -549,13 +549,13 @@ impl Studio {
             ui.horizontal(|ui| {
                 ui.add(
                     egui::DragValue::new(&mut self.new_width)
-                        .range(96..=256)
+                        .range(1..=256)
                         .prefix("W ")
                         .suffix(" px"),
                 );
                 ui.label("× 96 px");
             });
-            ui.add(egui::Slider::new(&mut self.new_width, 96..=256).show_value(false));
+            ui.add(egui::Slider::new(&mut self.new_width, 1..=256).show_value(false));
             ui.horizontal(|ui| {
                 for width in [96, 128, 192, 256] {
                     ui.selectable_value(&mut self.new_width, width, width.to_string());

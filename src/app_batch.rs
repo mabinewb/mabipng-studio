@@ -217,7 +217,7 @@ impl Studio {
                                 ui.label("너비");
                                 ui.add(
                                     egui::DragValue::new(&mut dialog.options.width)
-                                        .range(128..=256)
+                                        .range(1..=256)
                                         .suffix(" px"),
                                 );
                                 ui.label("높이");

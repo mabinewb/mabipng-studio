@@ -13,7 +13,7 @@ fn loaded_ordinary_png_opens_conversion_before_editing_and_cannot_undo_to_raw_so
     assert!(app.frame_dialog.as_ref().unwrap().initial_import);
     assert!(app.entries[0].painting.is_none());
     assert!(!app.entries[0].effective_doc().is_chat());
-    assert_eq!(app.frame_dialog.as_ref().unwrap().frame.width, 128);
+    assert_eq!(app.frame_dialog.as_ref().unwrap().frame.width, 32);
     app.apply_framing(&ctx).unwrap();
     assert_eq!(app.view, 3);
     assert!(app.entries[0].effective_doc().is_chat());
@@ -272,7 +272,7 @@ fn framing_validation_and_save_lock_leave_editing_document_untouched() {
     app.create_blank(&ctx, 128, "Test").unwrap();
     let original = app.entries[0].effective_doc().bytes.clone();
     app.open_canvas_resize(&ctx);
-    app.frame_dialog.as_mut().unwrap().frame.width = 127;
+    app.frame_dialog.as_mut().unwrap().frame.width = 0;
     assert!(app.apply_framing(&ctx).is_err());
     assert!(app.frame_dialog.is_some());
     assert_eq!(app.entries[0].effective_doc().bytes, original);
