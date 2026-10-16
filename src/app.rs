@@ -1,16 +1,16 @@
 use eframe::egui::{self, Color32, RichText, Vec2};
 use egui_lucide::Lucide;
 use mabipng_studio::{
-    browser,
+    batch, browser,
     brush::{Canvas, Shape},
     engine::{self, Document, Mode, Settings},
     framing::{Frame, PaletteMode, Sampling},
     raster::{self, Fragment, Region, Tool},
     storage,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -24,7 +24,6 @@ struct Entry {
     path: PathBuf,
     doc: Arc<Document>,
     texture: egui::TextureHandle,
-    checked: bool,
     status: String,
     failed: bool,
     output: Option<PathBuf>,
@@ -132,6 +131,17 @@ struct FrameDialog {
     error: Option<String>,
     dirty: bool,
     viewport: Option<(egui::Rect, f32)>,
+    initial_import: bool,
+}
+
+struct BatchDialog {
+    paths: Vec<PathBuf>,
+    options: batch::Options,
+    running: bool,
+    results: Vec<batch::ItemResult>,
+    stop: Arc<AtomicBool>,
+    error: Option<String>,
+    cancelled: bool,
 }
 
 #[derive(Clone)]
@@ -143,11 +153,12 @@ enum RemoveRequest {
 struct BrowserItem {
     path: PathBuf,
     texture: Option<egui::TextureHandle>,
-    checked: bool,
     error: Option<String>,
 }
 
 enum Event {
+    BatchItem(batch::ItemResult),
+    BatchDone(bool),
     Loaded(PathBuf, Result<Document, String>),
     Preview(u64, Result<Document, String>),
     Saved(u64, Result<(PathBuf, Document), String>),
@@ -212,6 +223,8 @@ pub struct Studio {
     frame_dialog: Option<FrameDialog>,
     remove_request: Option<RemoveRequest>,
     frame_when_ready: bool,
+    conversion_queue: VecDeque<u64>,
+    batch_dialog: Option<BatchDialog>,
 }
 
 impl Studio {
@@ -281,6 +294,8 @@ impl Studio {
             frame_dialog: None,
             remove_request: None,
             frame_when_ready: false,
+            conversion_queue: VecDeque::new(),
+            batch_dialog: None,
             output_dir: default_output_dir(),
             preview: None,
             preview_error: None,
@@ -393,12 +408,15 @@ impl Studio {
 
     fn open_browser_item(&mut self, ctx: &egui::Context, path: PathBuf) {
         let path = path.canonicalize().unwrap_or(path);
-        if let Some(item) = self.browser_items.iter_mut().find(|item| item.path == path) {
-            item.checked = true;
-        }
         if let Some(entry) = self.entries.iter().find(|entry| entry.path == path) {
             let id = entry.id;
             self.activate_entry(id);
+            if self
+                .selected_entry()
+                .is_some_and(|e| !e.effective_doc().is_chat())
+            {
+                self.queue_current_conversion(ctx);
+            }
         } else {
             self.activate_after_load = Some(path.clone());
             self.load_paths(ctx, vec![path]);
@@ -408,12 +426,6 @@ impl Studio {
     fn set_browser_directory(&mut self, folder: PathBuf) {
         self.browser_dir = folder;
         self.browser_filter.clear();
-        for entry in &mut self.entries {
-            entry.checked = false;
-        }
-        for item in &mut self.browser_items {
-            item.checked = false;
-        }
     }
 
     fn update_author(&mut self) {
@@ -450,7 +462,6 @@ impl Studio {
             path,
             doc: Arc::new(doc),
             texture,
-            checked: true,
             status: "새 문서".into(),
             failed: false,
             output: None,
@@ -618,6 +629,7 @@ impl Studio {
             && self.paste_preview.is_none()
             && self.frame_dialog.is_none()
             && self.remove_request.is_none()
+            && self.batch_dialog.is_none()
         {
             if self.view == 3 && self.tool == Tool::Select && self.fragment.is_some() {
                 self.request_selection_paste(ctx);
@@ -680,10 +692,27 @@ impl Studio {
     }
 
     fn load_paths(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
+        if let Some(path) = paths.first() {
+            self.activate_after_load = Some(path.canonicalize().unwrap_or_else(|_| path.clone()));
+        }
         let mut accepted = Vec::new();
         for path in paths {
             let path = path.canonicalize().unwrap_or(path);
-            if self.loading.contains(&path) || self.entries.iter().any(|entry| entry.path == path) {
+            if let Some(entry) = self.entries.iter().find(|entry| entry.path == path) {
+                let id = entry.id;
+                self.activate_entry(id);
+                if self.activate_after_load.as_ref() == Some(&path) {
+                    self.activate_after_load = None;
+                }
+                if self
+                    .selected_entry()
+                    .is_some_and(|e| !e.effective_doc().is_chat())
+                {
+                    self.queue_current_conversion(ctx);
+                }
+                continue;
+            }
+            if self.loading.contains(&path) {
                 continue;
             }
             if !path
@@ -716,18 +745,30 @@ impl Studio {
     }
 
     fn open_files(&mut self, ctx: &egui::Context) {
-        if let Some(paths) = rfd::FileDialog::new()
+        if let Some(path) = rfd::FileDialog::new()
             .set_title("PNG 파일 열기")
             .add_filter("PNG 이미지", &["png"])
-            .pick_files()
+            .pick_file()
         {
-            self.load_paths(ctx, paths);
+            self.load_paths(ctx, vec![path]);
         }
     }
 
     fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
+                Event::BatchItem(result) => {
+                    if let Some(dialog) = &mut self.batch_dialog {
+                        dialog.results.push(result);
+                    }
+                }
+                Event::BatchDone(cancelled) => {
+                    if let Some(dialog) = &mut self.batch_dialog {
+                        dialog.running = false;
+                        dialog.cancelled = cancelled;
+                    }
+                    self.refresh_browser(ctx);
+                }
                 Event::Loaded(path, result) => {
                     self.loading.remove(&path);
                     let activate = self.activate_after_load.as_ref() == Some(&path);
@@ -736,6 +777,7 @@ impl Studio {
                     }
                     match result {
                         Ok(doc) => {
+                            let needs_conversion = !doc.is_chat();
                             self.next_id += 1;
                             let id = self.next_id;
                             let texture = texture(ctx, &format!("original-{id}"), &doc.image);
@@ -744,7 +786,6 @@ impl Studio {
                                 path,
                                 doc: Arc::new(doc),
                                 texture,
-                                checked: true,
                                 status: "대기".into(),
                                 failed: false,
                                 output: None,
@@ -759,6 +800,9 @@ impl Studio {
                             });
                             if self.selected.is_none() || activate {
                                 self.activate_entry(id);
+                            }
+                            if needs_conversion {
+                                self.conversion_queue.push_back(id);
                             }
                         }
                         Err(error) => {
@@ -792,12 +836,10 @@ impl Studio {
                             self.browser_items = paths
                                 .into_iter()
                                 .map(|path| {
-                                    let checked = old.get(&path).is_some_and(|item| item.checked);
                                     let texture = old.remove(&path).and_then(|item| item.texture);
                                     BrowserItem {
                                         path,
                                         texture,
-                                        checked,
                                         error: None,
                                     }
                                 })
@@ -889,10 +931,12 @@ impl Studio {
             }
         }
         self.open_waiting_clipboard(ctx);
+        self.open_next_conversion(ctx);
     }
 
     fn open_waiting_clipboard(&mut self, ctx: &egui::Context) {
         if self.pending == 0
+            && self.batch_dialog.is_none()
             && self.frame_dialog.is_none()
             && self.remove_request.is_none()
             && !self.show_new
@@ -910,6 +954,9 @@ impl Studio {
         let Some(entry) = self.selected_entry() else {
             return;
         };
+        if !entry.effective_doc().is_chat() {
+            return;
+        }
         let settings = self.settings_for_entry(entry);
         let doc = entry.effective_doc().clone();
         let tx = self.tx.clone();
@@ -925,36 +972,33 @@ impl Studio {
         });
     }
 
-    fn request_save(&mut self, ctx: &egui::Context, current_only: bool) {
-        if self.pending > 0 {
+    fn request_save(&mut self, ctx: &egui::Context) {
+        if self.pending > 0
+            || self.batch_dialog.is_some()
+            || self.frame_dialog.is_some()
+            || !self.loading.is_empty()
+        {
             return;
         }
         self.finish_strokes(ctx);
-        if self.entries.iter().any(|entry| {
-            if current_only {
-                Some(entry.id) == self.selected
-            } else {
-                entry.checked
-            }
-        }) {
-            self.save_dialog = Some(current_only);
+        if self
+            .selected_entry()
+            .is_some_and(|e| !e.effective_doc().is_chat())
+        {
+            self.queue_current_conversion(ctx);
+        } else if self.selected_entry().is_some() {
+            self.save_dialog = Some(true);
         }
     }
 
     fn save_modal(&mut self, ctx: &egui::Context) {
-        let Some(current_only) = self.save_dialog else {
+        let Some(_) = self.save_dialog else {
             return;
         };
         let entries: Vec<_> = self
             .entries
             .iter()
-            .filter(|entry| {
-                if current_only {
-                    Some(entry.id) == self.selected
-                } else {
-                    entry.checked
-                }
-            })
+            .filter(|entry| Some(entry.id) == self.selected)
             .collect();
         let existing = entries
             .iter()
@@ -1010,7 +1054,7 @@ impl Studio {
                     existing > 0,
                     egui::Button::image_and_text(
                         Lucide::Save.size(17.0).color(MUTED).image(),
-                        format!("기존 파일에 저장 ({existing}개)"),
+                        "기존 파일에 저장",
                     ),
                 )
                 .clicked()
@@ -1033,22 +1077,29 @@ impl Studio {
         }
         if let Some(choice) = choice {
             self.save_dialog = None;
-            self.save_checked_as(ctx, current_only, choice);
+            self.save_current_as(ctx, choice);
         }
     }
 
-    fn save_checked_as(&mut self, ctx: &egui::Context, current_only: bool, choice: SaveChoice) {
-        if self.pending > 0 {
+    fn save_current_as(&mut self, ctx: &egui::Context, choice: SaveChoice) {
+        if self.pending > 0
+            || self.batch_dialog.is_some()
+            || self.frame_dialog.is_some()
+            || !self.loading.is_empty()
+        {
             return;
         }
         self.finish_strokes(ctx);
+        if self
+            .selected_entry()
+            .is_some_and(|e| !e.effective_doc().is_chat())
+        {
+            self.queue_current_conversion(ctx);
+            return;
+        }
         let mut jobs = Vec::new();
         for entry in &self.entries {
-            if if current_only {
-                Some(entry.id) != self.selected
-            } else {
-                !entry.checked
-            } {
+            if Some(entry.id) != self.selected {
                 continue;
             }
             let settings = self.settings_for_entry(entry);
@@ -1189,6 +1240,9 @@ impl Studio {
                         if command(ui, Lucide::FilePlus, "새 그림대화", false).clicked() {
                             self.open_new_dialog();
                         }
+                        if command(ui, Lucide::Layers, "일괄 변환", false).clicked() {
+                            self.open_batch(ctx);
+                        }
                         if icon_button(ui, Lucide::UserRound, "그림대화 PNG에서 작성자 가져오기")
                             .clicked()
                         {
@@ -1209,7 +1263,6 @@ impl Studio {
             )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    let count = self.entries.iter().filter(|entry| entry.checked).count();
                     ui.vertical(|ui| {
                         ui.set_max_width((ui.available_width() - 245.0).max(200.0));
                         if self.pending > 0 {
@@ -1239,23 +1292,18 @@ impl Studio {
                             .on_hover_text(&self.status);
                         }
                         ui.label(
-                            RichText::new(format!(
-                                "{}개 파일 · {}개 선택",
-                                self.entries.len(),
-                                count
-                            ))
-                            .small()
-                            .color(MUTED),
+                            RichText::new(format!("열린 문서 {}개", self.entries.len()))
+                                .small()
+                                .color(MUTED),
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let enabled = count > 0 && self.pending == 0 && self.loading.is_empty();
-                        let response = ui.add_enabled(
-                            enabled,
-                            primary_button(Lucide::SaveAll, &format!("선택 파일 저장 ({count})")),
-                        );
+                        let enabled =
+                            self.selected.is_some() && self.pending == 0 && self.loading.is_empty();
+                        let response =
+                            ui.add_enabled(enabled, primary_button(Lucide::Save, "현재 문서 저장"));
                         if response.clicked() {
-                            self.request_save(ctx, false);
+                            self.request_save(ctx);
                         }
                     });
                 });
@@ -1266,7 +1314,6 @@ impl Studio {
         let ctx = ui.ctx().clone();
         let mut open = None;
         let mut draft = None;
-        let mut checks = Vec::new();
         let mut refresh = false;
         let mut pick_folder = false;
         let mut reset = false;
@@ -1310,7 +1357,6 @@ impl Studio {
                         .browser_items
                         .iter()
                         .any(|item| item.path == entry.path)
-                        && (entry.has_unsaved() || entry.checked || Some(entry.id) == self.selected)
                 });
                 if has_drafts {
                     egui::CollapsingHeader::new("작업 중 문서")
@@ -1325,23 +1371,21 @@ impl Studio {
                                             .browser_items
                                             .iter()
                                             .any(|item| item.path == entry.path)
-                                            || (!entry.has_unsaved()
-                                                && !entry.checked
-                                                && Some(entry.id) != self.selected)
                                         {
                                             continue;
                                         }
                                         ui.horizontal(|ui| {
-                                            ui.checkbox(&mut entry.checked, "");
                                             if ui
-                                                .add(
+                                                .add_sized(
+                                                    [(ui.available_width() - 42.0).max(80.0), 32.0],
                                                     egui::Button::new(
                                                         RichText::new(display_name(&entry.path))
                                                             .size(12.0),
                                                     )
                                                     .selected(Some(entry.id) == self.selected)
-                                                    .wrap(),
+                                                    .truncate(),
                                                 )
+                                                .on_hover_text(display_name(&entry.path))
                                                 .clicked()
                                             {
                                                 draft = Some(entry.id);
@@ -1381,7 +1425,6 @@ impl Studio {
                             let loaded = self.entries.iter().find(|entry| entry.path == item.path);
                             let selected = current_path.as_ref() == Some(&item.path)
                                 || self.activate_after_load.as_ref() == Some(&item.path);
-                            let mut checked = loaded.map_or(item.checked, |entry| entry.checked);
                             let edited = loaded.is_some_and(Entry::has_unsaved);
                             egui::Frame::new()
                                 .fill(if selected {
@@ -1393,10 +1436,6 @@ impl Studio {
                                 .inner_margin(6)
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        if ui.checkbox(&mut checked, "").changed() {
-                                            item.checked = checked;
-                                            checks.push((item.path.clone(), checked));
-                                        }
                                         let content = ui
                                             .vertical(|ui| {
                                                 ui.set_width(162.0);
@@ -1486,13 +1525,6 @@ impl Studio {
                         }
                     });
             });
-        for (path, checked) in checks {
-            if let Some(entry) = self.entries.iter_mut().find(|entry| entry.path == path) {
-                entry.checked = checked;
-            } else if checked {
-                self.load_paths(&ctx, vec![path]);
-            }
-        }
         if let Some(path) = open {
             self.open_browser_item(&ctx, path);
         }
@@ -2284,6 +2316,7 @@ impl Studio {
                 && self.paste_preview.is_none()
                 && self.frame_dialog.is_none()
                 && self.remove_request.is_none()
+                && self.batch_dialog.is_none()
                 && !egui::Popup::is_any_open(ctx)
                 && if self.tool == Tool::Brush {
                     paint_events(
@@ -2498,7 +2531,7 @@ impl Studio {
                             .on_hover_text("현재 파일 저장")
                             .clicked()
                         {
-                            self.request_save(ctx, true);
+                            self.request_save(ctx);
                         }
                     });
                 });
@@ -2773,7 +2806,8 @@ impl eframe::App for Studio {
             || self.paste_preview.is_some()
             || self.frame_dialog.is_some()
             || self.clipboard_waiting.is_some()
-            || self.remove_request.is_some();
+            || self.remove_request.is_some()
+            || self.batch_dialog.is_some();
         if !modal_open
             && ctx.input(|input| input.modifiers.command && input.key_pressed(egui::Key::N))
         {
@@ -2790,7 +2824,9 @@ impl eframe::App for Studio {
                 .map(|file| file.path().to_path_buf())
                 .collect::<Vec<_>>()
         });
-        if !modal_open && !dropped.is_empty() {
+        if self.batch_dialog.is_some() && !dropped.is_empty() {
+            self.add_batch_paths(dropped.clone());
+        } else if !modal_open && !dropped.is_empty() {
             self.load_paths(&ctx, dropped);
         }
         if !modal_open
@@ -2801,7 +2837,7 @@ impl eframe::App for Studio {
         if !modal_open
             && ctx.input(|input| input.modifiers.command && input.key_pressed(egui::Key::S))
         {
-            self.request_save(&ctx, false);
+            self.request_save(&ctx);
         }
         if !modal_open && !ctx.egui_wants_keyboard_input() {
             if ctx.input(|input| input.modifiers.command && input.key_pressed(egui::Key::Z)) {
@@ -2823,7 +2859,7 @@ impl eframe::App for Studio {
             }
         }
         if !self.force_close && ctx.input(|input| input.viewport().close_requested()) {
-            if self.pending > 0 {
+            if self.pending > 0 || self.batch_dialog.as_ref().is_some_and(|d| d.running) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.message(
                     "파일을 저장하고 있습니다. 완료 후 창을 닫아 주시기 바랍니다.".into(),
@@ -2853,6 +2889,7 @@ impl eframe::App for Studio {
             self.selection_paste_modal(&ctx);
             self.framing_modal(&ctx);
             self.remove_modal(&ctx);
+            self.batch_modal(&ctx);
         }
         if let Some(start) = self.dirty_at {
             if start.elapsed() >= Duration::from_millis(250) {
@@ -2890,6 +2927,8 @@ impl eframe::App for Studio {
     }
 }
 
+#[path = "app_batch.rs"]
+mod batch_ui;
 #[path = "app_transform.rs"]
 mod transform_ui;
 

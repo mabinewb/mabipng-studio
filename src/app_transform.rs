@@ -48,6 +48,55 @@ impl FrameDialog {
 }
 
 impl Studio {
+    pub(super) fn queue_current_conversion(&mut self, ctx: &egui::Context) {
+        if let Some(id) = self.selected
+            && !self.conversion_queue.contains(&id)
+        {
+            self.conversion_queue.push_front(id);
+        }
+        self.open_next_conversion(ctx);
+    }
+
+    pub(super) fn open_next_conversion(&mut self, ctx: &egui::Context) {
+        if self.pending > 0
+            || self.frame_dialog.is_some()
+            || self.batch_dialog.is_some()
+            || self.show_new
+            || self.save_dialog.is_some()
+            || self.remove_request.is_some()
+            || self.confirm_discard
+            || self.paste_preview.is_some()
+        {
+            return;
+        }
+        while let Some(id) = self.conversion_queue.pop_front() {
+            let Some(entry) = self
+                .entries
+                .iter()
+                .find(|e| e.id == id && !e.effective_doc().is_chat())
+            else {
+                continue;
+            };
+            let source = entry.effective_doc().clone();
+            self.activate_entry(id);
+            self.open_framing(ctx, source.clone(), Some(id));
+            if let Some(dialog) = &mut self.frame_dialog {
+                dialog.initial_import = true;
+                dialog.frame.fit(source.image.dimensions(), false);
+            }
+            break;
+        }
+    }
+
+    pub(super) fn cancel_framing(&mut self) {
+        if let Some(dialog) = self.frame_dialog.take()
+            && dialog.initial_import
+            && let Some(id) = dialog.target
+        {
+            self.close_entry(id);
+        }
+    }
+
     pub(super) fn open_framing(
         &mut self,
         ctx: &egui::Context,
@@ -91,6 +140,7 @@ impl Studio {
             error: None,
             dirty: true,
             viewport: None,
+            initial_import: false,
         });
     }
 
@@ -128,7 +178,9 @@ impl Studio {
                 .iter_mut()
                 .find(|e| e.id == id)
                 .ok_or("편집할 문서가 닫혔습니다.")?;
-            entry.checkpoint();
+            if !dialog.initial_import {
+                entry.checkpoint();
+            }
             if let Some(previous) = &entry.painting {
                 painting
                     .initial_palette
@@ -174,7 +226,9 @@ impl Studio {
             let width = (ctx.content_rect().width() - 64.0).clamp(600.0, 900.0);
             ui.set_width(width);
             ui.horizontal(|ui| {
-                ui.heading(if dialog.target.is_some() {
+                ui.heading(if dialog.initial_import {
+                    "PNG 변환 · 캔버스 및 이미지 배치"
+                } else if dialog.target.is_some() {
                     "캔버스 크기 및 이미지 배치"
                 } else {
                     "클립보드 이미지 영역 선택"
@@ -424,7 +478,7 @@ impl Studio {
             self.frame_dialog.as_mut().unwrap().error = Some(error);
         }
         if cancel || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.frame_dialog = None;
+            self.cancel_framing();
         }
         if self.frame_dialog.as_ref().is_some_and(|d| d.dirty) {
             ctx.request_repaint();
@@ -436,12 +490,8 @@ impl Studio {
             return;
         }
         if let Some(index) = self.entries.iter().position(|e| e.id == id) {
-            let entry = self.entries.remove(index);
-            for item in &mut self.browser_items {
-                if item.path == entry.path {
-                    item.checked = false;
-                }
-            }
+            self.entries.remove(index);
+            self.conversion_queue.retain(|&queued| queued != id);
             if self.selected == Some(id) {
                 self.selected = None;
                 if let Some(next) = self

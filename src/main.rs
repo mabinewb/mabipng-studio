@@ -9,6 +9,7 @@ fn main() -> eframe::Result {
     let mut screenshot = None;
     let mut painting = false;
     let mut framing = false;
+    let mut batch_mode = false;
     let mut author = None;
     let mut new_canvas = None;
     let mut zoom = None;
@@ -23,6 +24,8 @@ fn main() -> eframe::Result {
             painting = true;
         } else if arg == "--frame" {
             framing = true;
+        } else if arg == "--batch" {
+            batch_mode = true;
         } else if arg == "--new" {
             new_canvas = args
                 .next()
@@ -67,7 +70,16 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         Box::new(move |cc| {
+            let batch_paths = if batch_mode {
+                std::mem::take(&mut paths)
+            } else {
+                Vec::new()
+            };
             let mut studio = app::Studio::new(cc, paths, screenshot, painting, author);
+            if batch_mode {
+                studio.open_batch(&cc.egui_ctx);
+                studio.add_batch_paths(batch_paths);
+            }
             if let Some(width) = new_canvas {
                 studio.start_new(&cc.egui_ctx, width);
             }

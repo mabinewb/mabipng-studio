@@ -1,6 +1,151 @@
 use super::*;
 
 #[test]
+fn loaded_ordinary_png_opens_conversion_before_editing_and_cannot_undo_to_raw_source() {
+    let (ctx, mut app) = setup();
+    app.author = "Test".into();
+    let source = ordinary();
+    let original = source.bytes.clone();
+    app.tx
+        .send(Event::Loaded(PathBuf::from("input.png"), Ok(source)))
+        .unwrap();
+    app.receive(&ctx);
+    assert!(app.frame_dialog.as_ref().unwrap().initial_import);
+    assert!(app.entries[0].painting.is_none());
+    assert!(!app.entries[0].effective_doc().is_chat());
+    assert_eq!(app.frame_dialog.as_ref().unwrap().frame.width, 128);
+    app.apply_framing(&ctx).unwrap();
+    assert_eq!(app.view, 3);
+    assert!(app.entries[0].effective_doc().is_chat());
+    assert_eq!(app.entries[0].doc.bytes, original);
+    assert!(app.entries[0].undo.is_empty());
+    app.paint_history(&ctx, false);
+    assert!(app.entries[0].effective_doc().is_chat());
+}
+
+#[test]
+fn loaded_chat_skips_conversion_and_multiple_raw_imports_are_queued() {
+    let (ctx, mut app) = setup();
+    app.tx
+        .send(Event::Loaded(PathBuf::from("existing.png"), Ok(chat())))
+        .unwrap();
+    app.receive(&ctx);
+    assert!(app.frame_dialog.is_none());
+    for path in ["first.png", "second.png"] {
+        app.tx
+            .send(Event::Loaded(PathBuf::from(path), Ok(ordinary())))
+            .unwrap();
+    }
+    app.receive(&ctx);
+    let first = app.frame_dialog.as_ref().unwrap().target.unwrap();
+    assert_eq!(app.entries.len(), 3);
+    app.cancel_framing();
+    assert!(!app.entries.iter().any(|e| e.id == first));
+    app.receive(&ctx);
+    let second = app.frame_dialog.as_ref().unwrap().target.unwrap();
+    assert_ne!(first, second);
+    app.cancel_framing();
+    assert_eq!(app.entries.len(), 1);
+    assert!(app.entries[0].effective_doc().is_chat());
+}
+
+#[test]
+fn batch_conversion_is_separate_from_open_unsaved_documents() {
+    let (ctx, mut app) = setup();
+    app.create_blank(&ctx, 128, "Editor").unwrap();
+    app.set_palette_color(&ctx, 0, [12, 34, 56]).unwrap();
+    let editing = app.entries[0].effective_doc().bytes.clone();
+    let selected = app.selected;
+    let root = tempfile::tempdir().unwrap();
+    let one = root.path().join("ordinary.png");
+    let two = root.path().join("existing.png");
+    std::fs::write(&one, ordinary().bytes).unwrap();
+    std::fs::write(&two, chat().bytes).unwrap();
+    app.open_batch(&ctx);
+    app.add_batch_paths(vec![
+        one.clone(),
+        two.clone(),
+        one,
+        root.path().join("ignored.txt"),
+    ]);
+    assert_eq!(app.batch_dialog.as_ref().unwrap().paths.len(), 2);
+    let dialog = app.batch_dialog.as_mut().unwrap();
+    dialog.options.output_dir = root.path().join("output");
+    dialog.options.author = "Batch".into();
+    app.start_batch(&ctx);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.batch_dialog.as_ref().unwrap().running && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        app.receive(&ctx);
+    }
+    let dialog = app.batch_dialog.as_ref().unwrap();
+    assert!(!dialog.running);
+    assert_eq!(dialog.results.len(), 2);
+    assert!(dialog.results.iter().all(|r| r.output.is_ok()));
+    assert_eq!(
+        Document::load(dialog.results[0].output.as_ref().unwrap())
+            .unwrap()
+            .image
+            .dimensions(),
+        (256, 96)
+    );
+    assert_eq!(
+        Document::load(dialog.results[1].output.as_ref().unwrap())
+            .unwrap()
+            .author
+            .as_deref(),
+        Some("기존닉")
+    );
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.selected, selected);
+    assert_eq!(app.entries[0].effective_doc().bytes, editing);
+    assert!(app.entries[0].has_unsaved());
+    assert!(app.frame_dialog.is_none());
+}
+
+#[test]
+fn batch_reports_each_error_and_continues_without_overwriting_sources() {
+    let (ctx, mut app) = setup();
+    let root = tempfile::tempdir().unwrap();
+    let valid = root.path().join("valid.png");
+    let original = chat().bytes;
+    std::fs::write(&valid, &original).unwrap();
+    app.open_batch(&ctx);
+    app.add_batch_paths(vec![root.path().join("missing.png"), valid.clone()]);
+    app.batch_dialog.as_mut().unwrap().options.output_dir = root.path().join("results");
+    app.start_batch(&ctx);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.batch_dialog.as_ref().unwrap().running && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        app.receive(&ctx);
+    }
+    let results = &app.batch_dialog.as_ref().unwrap().results;
+    assert_eq!(results.len(), 2);
+    assert!(results[0].output.is_err());
+    assert!(results[1].output.is_ok());
+    assert_eq!(std::fs::read(&valid).unwrap(), original);
+}
+
+#[test]
+fn batch_modal_blocks_underlying_paint_and_single_save() {
+    let (ctx, mut app) = setup();
+    app.create_blank(&ctx, 128, "Test").unwrap();
+    drawing_frame(&ctx, &mut app, vec![]);
+    let (rect, _) = app.entries[0].painting.as_ref().unwrap().viewport.unwrap();
+    app.open_batch(&ctx);
+    let before = app.entries[0].effective_doc().bytes.clone();
+    drawing_frame(
+        &ctx,
+        &mut app,
+        vec![button(rect.center(), true), button(rect.center(), false)],
+    );
+    assert_eq!(app.entries[0].effective_doc().bytes, before);
+    app.request_save(&ctx);
+    assert!(app.save_dialog.is_none());
+    assert_eq!(app.pending, 0);
+}
+
+#[test]
 fn canvas_framing_auto_palette_off_restores_default_colors_not_custom_colors() {
     let (ctx, mut app) = setup();
     app.create_blank(&ctx, 128, "Test").unwrap();
@@ -28,7 +173,7 @@ fn resized_chat_can_overwrite_original_and_undo_after_save_restores_old_dimensio
     dialog.frame.set_size(129, 49);
     dialog.frame.fit(dialog.source.image.dimensions(), true);
     app.apply_framing(&ctx).unwrap();
-    app.save_checked_as(&ctx, true, SaveChoice::Existing);
+    app.save_current_as(&ctx, SaveChoice::Existing);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.pending > 0 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -517,7 +662,6 @@ fn add(app: &mut Studio, ctx: &egui::Context, name: &str, doc: Document) {
         path: PathBuf::from(name),
         doc: Arc::new(doc),
         texture: image,
-        checked: true,
         status: "대기".into(),
         failed: false,
         output: None,
@@ -750,10 +894,10 @@ fn wide_painting_uses_native_pixel_tiles() {
 }
 
 #[test]
-fn mixed_batch_preserves_existing_author_and_uses_new_author_for_conversion() {
+fn single_save_only_saves_the_selected_document() {
     let (ctx, mut app) = setup();
     add(&mut app, &ctx, "existing.png", chat());
-    add(&mut app, &ctx, "ordinary.png", ordinary());
+    add(&mut app, &ctx, "second.png", chat());
     let directory = std::env::temp_dir().join(format!(
         "mabipng-ui-{}-{}",
         std::process::id(),
@@ -761,37 +905,35 @@ fn mixed_batch_preserves_existing_author_and_uses_new_author_for_conversion() {
     ));
     app.output_dir = Some(directory.clone());
     app.author = "새닉".into();
-    app.save_checked_as(&ctx, false, SaveChoice::New);
+    app.save_current_as(&ctx, SaveChoice::New);
     let deadline = Instant::now() + Duration::from_secs(10);
     while app.pending > 0 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
         app.receive(&ctx);
     }
     assert_eq!(app.pending, 0);
-    assert_eq!(app.save_ok, 2, "{:?}", app.logs);
-    let old = Document::load(app.entries[0].output.as_ref().unwrap()).unwrap();
+    assert_eq!(app.save_ok, 1, "{:?}", app.logs);
+    assert!(app.entries[0].output.is_none());
     let new = Document::load(app.entries[1].output.as_ref().unwrap()).unwrap();
-    assert_eq!(old.author.as_deref(), Some("기존닉"));
-    assert_eq!(new.author.as_deref(), Some("새닉"));
+    assert_eq!(new.author.as_deref(), Some("기존닉"));
     assert_eq!(
         new.authid,
-        Some(engine::author_to_authid("새닉").to_string())
+        Some(engine::author_to_authid("기존닉").to_string())
     );
-    for entry in &app.entries {
-        std::fs::remove_file(entry.output.as_ref().unwrap()).unwrap();
-    }
+    std::fs::remove_file(app.entries[1].output.as_ref().unwrap()).unwrap();
     std::fs::remove_dir(directory).unwrap();
 }
 
 #[test]
-fn missing_nickname_prevents_partial_batch_save_and_texture_keeps_aspect_ratio() {
+fn ordinary_image_cannot_be_saved_without_the_conversion_dialog() {
     let (ctx, mut app) = setup();
     add(&mut app, &ctx, "existing.png", chat());
     add(&mut app, &ctx, "ordinary.png", ordinary());
     assert_eq!(app.entries[1].texture.size(), [32, 16]);
-    app.save_checked_as(&ctx, false, SaveChoice::New);
+    app.save_current_as(&ctx, SaveChoice::New);
     assert_eq!(app.pending, 0);
-    assert!(app.error && app.author_focus);
+    assert!(app.frame_dialog.as_ref().unwrap().initial_import);
+    assert!(app.apply_framing(&ctx).is_err());
     assert!(app.entries.iter().all(|entry| entry.output.is_none()));
 }
 
@@ -953,12 +1095,12 @@ fn author_changes_without_checkbox_and_save_choice_controls_overwrite() {
     assert_eq!(app.author, "기존닉");
     app.author = "변경이름".into();
     app.update_author();
-    app.request_save(&ctx, true);
+    app.request_save(&ctx);
     assert_eq!(app.save_dialog, Some(true));
     assert_eq!(app.pending, 0);
     assert_eq!(std::fs::read(&original).unwrap(), initial);
     app.save_dialog = None;
-    app.save_checked_as(&ctx, true, SaveChoice::Existing);
+    app.save_current_as(&ctx, SaveChoice::Existing);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.pending > 0 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -973,7 +1115,7 @@ fn author_changes_without_checkbox_and_save_choice_controls_overwrite() {
     app.author = "새파일이름".into();
     app.update_author();
     app.output_dir = Some(dir.path().to_owned());
-    app.save_checked_as(&ctx, true, SaveChoice::New);
+    app.save_current_as(&ctx, SaveChoice::New);
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.pending > 0 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -1030,17 +1172,17 @@ fn folder_browser_lists_disk_images_without_opening_them_until_selected() {
 }
 
 #[test]
-fn changing_browser_folder_clears_hidden_batch_save_targets() {
+fn changing_browser_folder_preserves_current_single_save_target() {
     let (ctx, mut app) = setup();
     add(&mut app, &ctx, "folder-one/a.png", chat());
     add(&mut app, &ctx, "folder-one/b.png", chat());
     app.author = "미저장작성자".into();
     app.update_author();
-    assert!(app.entries.iter().all(|entry| entry.checked));
+    let selected = app.selected;
     app.set_browser_directory(PathBuf::from("folder-two"));
-    assert!(app.entries.iter().all(|entry| !entry.checked));
+    assert_eq!(app.selected, selected);
     assert!(app.entries[1].has_unsaved());
-    app.request_save(&ctx, false);
-    assert!(app.save_dialog.is_none());
+    app.request_save(&ctx);
+    assert!(app.save_dialog.is_some());
     assert_eq!(app.pending, 0);
 }

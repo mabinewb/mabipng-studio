@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod browser;
 pub mod brush;
 pub mod engine;
