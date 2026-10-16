@@ -1,0 +1,33 @@
+[package]
+name = "mabipng-studio"
+version = "1.0.0"
+edition = "2024"
+description = "Mabinogi picture chat PNG editor"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1"
+arboard = "3.7"
+chrono = "0.4"
+color_quant = "1.1"
+crc32fast = "1"
+dirs = "6"
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "accesskit"] }
+egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
+egui-lucide = "0.1"
+encoding_rs = "0.8"
+flate2 = "1"
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+png = "0.17"
+rfd = "0.15"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+lto = "thin"
+strip = true
