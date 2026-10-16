@@ -351,14 +351,22 @@ impl Document {
 
 /// Creates a blank 2-bit picture chat with background index zero and author metadata.
 pub fn new_chat(width: u32, author: &str) -> Result<Document> {
+    new_chat_sized(width, 96, author)
+}
+
+pub fn new_chat_sized(width: u32, height: u32, author: &str) -> Result<Document> {
     ensure!(
         (1..=256).contains(&width),
         "새 그림대화 너비는 1 이상 256 이하로 입력해 주세요."
     );
+    ensure!(
+        (1..=96).contains(&height),
+        "새 그림대화 높이는 1 이상 96 이하로 입력해 주세요."
+    );
     encode_author(author)?;
     let mut bytes = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut bytes, width, 96);
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
         encoder.set_color(png::ColorType::Indexed);
         encoder.set_depth(png::BitDepth::Two);
         encoder.set_palette(
@@ -371,7 +379,7 @@ pub fn new_chat(width: u32, author: &str) -> Result<Document> {
             .write_header()
             .context("새 그림대화 PNG 헤더를 저장할 수 없습니다.")?;
         writer
-            .write_image_data(&vec![0; (width as usize).div_ceil(4) * 96])
+            .write_image_data(&vec![0; (width as usize).div_ceil(4) * height as usize])
             .context("새 그림대화 이미지 데이터를 저장할 수 없습니다.")?;
         writer
             .finish()

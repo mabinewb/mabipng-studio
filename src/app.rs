@@ -202,6 +202,7 @@ pub struct Studio {
     force_close: bool,
     show_new: bool,
     new_width: u32,
+    new_height: u32,
     new_author: String,
     new_error: Option<String>,
     new_focus: bool,
@@ -322,6 +323,7 @@ impl Studio {
             force_close: false,
             show_new: false,
             new_width: 256,
+            new_height: 96,
             new_author: String::new(),
             new_error: None,
             new_focus: false,
@@ -488,7 +490,18 @@ impl Studio {
         width: u32,
         author: &str,
     ) -> Result<(), String> {
-        let mut doc = engine::new_chat(width, author).map_err(|error| format!("{error:#}"))?;
+        self.create_blank_sized(ctx, width, 96, author)
+    }
+
+    fn create_blank_sized(
+        &mut self,
+        ctx: &egui::Context,
+        width: u32,
+        height: u32,
+        author: &str,
+    ) -> Result<(), String> {
+        let mut doc =
+            engine::new_chat_sized(width, height, author).map_err(|error| format!("{error:#}"))?;
         if !self.fix_palette {
             doc = Document::from_bytes(
                 engine::replace_palette(&doc, &RAW_PALETTE).map_err(|e| e.to_string())?,
@@ -553,7 +566,13 @@ impl Studio {
                         .prefix("W ")
                         .suffix(" px"),
                 );
-                ui.label("× 96 px");
+                ui.label("×");
+                ui.add(
+                    egui::DragValue::new(&mut self.new_height)
+                        .range(1..=96)
+                        .prefix("H ")
+                        .suffix(" px"),
+                );
             });
             ui.add(egui::Slider::new(&mut self.new_width, 1..=256).show_value(false));
             ui.horizontal(|ui| {
@@ -583,7 +602,12 @@ impl Studio {
             });
         });
         if create {
-            match self.create_blank(ctx, self.new_width, &self.new_author.clone()) {
+            match self.create_blank_sized(
+                ctx,
+                self.new_width,
+                self.new_height,
+                &self.new_author.clone(),
+            ) {
                 Ok(()) => {
                     self.show_new = false;
                     self.new_error = None;

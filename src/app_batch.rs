@@ -223,7 +223,7 @@ impl Studio {
                                 ui.label("높이");
                                 ui.add(
                                     egui::DragValue::new(&mut dialog.options.height)
-                                        .range(48..=96)
+                                        .range(1..=96)
                                         .suffix(" px"),
                                 );
                             });

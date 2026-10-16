@@ -65,8 +65,8 @@ impl Frame {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            (1..=256).contains(&self.width) && (48..=96).contains(&self.height),
-            "출력 크기는 가로 1~256, 세로 48~96픽셀이어야 합니다."
+            (1..=256).contains(&self.width) && (1..=96).contains(&self.height),
+            "출력 크기는 가로 1~256, 세로 1~96픽셀이어야 합니다."
         );
         ensure!(
             self.scale.is_finite()
@@ -309,6 +309,35 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn short_canvases_render_in_every_palette_mode() {
+        let source = engine::new_chat(96, "Test").unwrap();
+        let settings = Settings {
+            author: Some("Test".into()),
+            ..Default::default()
+        };
+        for (width, height) in [(1, 1), (96, 1), (96, 16), (96, 47)] {
+            let mut frame = Frame::new(&source);
+            frame.set_size(width, height);
+            frame.fit(source.image.dimensions(), false);
+            for mode in [
+                PaletteMode::Keep,
+                PaletteMode::Adaptive,
+                PaletteMode::Default,
+            ] {
+                let doc = frame.render(&source, mode, &settings).unwrap();
+                assert_eq!(doc.image.dimensions(), (width, height));
+                assert_eq!(
+                    engine::indexed_pixels(&doc).unwrap().len(),
+                    (width * height) as usize
+                );
+            }
+        }
+        let mut frame = Frame::new(&source);
+        frame.height = 0;
+        assert!(frame.validate().is_err());
     }
 
     #[test]

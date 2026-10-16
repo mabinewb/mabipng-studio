@@ -95,12 +95,13 @@ mod tests {
             engine::document_from_rgba(96, 96, &[40, 80, 120, 255].repeat(96 * 96)).unwrap();
         std::fs::write(&source, image.bytes).unwrap();
         let mut settings = options(root.path().join("output"));
-        for width in [1, 96] {
+        for (width, height) in [(1, 1), (96, 1), (96, 47)] {
             settings.width = width;
+            settings.height = height;
             let output = convert_one(&source, &settings).unwrap();
             assert_eq!(
                 Document::load(&output).unwrap().image.dimensions(),
-                (width, 48)
+                (width, height)
             );
         }
     }

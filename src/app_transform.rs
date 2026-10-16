@@ -111,7 +111,7 @@ impl Studio {
         if target.is_some() {
             frame.set_size(
                 source.image.width().clamp(1, 256),
-                source.image.height().clamp(48, 96),
+                source.image.height().clamp(1, 96),
             );
             frame.scale = 1.0;
             frame.center(source.image.dimensions());
@@ -305,7 +305,7 @@ impl Studio {
                                 ui.label("너비");
                                 ui.add(egui::DragValue::new(&mut w).range(1..=256).suffix(" px"));
                                 ui.label("높이");
-                                ui.add(egui::DragValue::new(&mut h).range(48..=96).suffix(" px"));
+                                ui.add(egui::DragValue::new(&mut h).range(1..=96).suffix(" px"));
                             });
                             egui::ComboBox::from_id_salt("frame-size-preset")
                                 .selected_text("크기 프리셋")

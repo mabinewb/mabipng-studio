@@ -1,6 +1,24 @@
 use super::*;
 
 #[test]
+fn experimental_short_canvases_include_one_by_one_and_reject_zero_height() {
+    for width in [1, 3, 96, 256] {
+        for height in [1, 2, 16, 47, 48, 96] {
+            let doc = new_chat_sized(width, height, "Test").unwrap();
+            assert_eq!(doc.image.dimensions(), (width, height));
+            assert_eq!(
+                indexed_pixels(&doc).unwrap(),
+                vec![0; (width * height) as usize]
+            );
+            assert!(doc.is_chat());
+        }
+    }
+    for height in [0, 97, u32::MAX] {
+        assert!(new_chat_sized(96, height, "Test").is_err());
+    }
+}
+
+#[test]
 fn resized_canvas_retains_duplicate_indices_alpha_and_ancillary_metadata() {
     let doc = indexed(
         5,

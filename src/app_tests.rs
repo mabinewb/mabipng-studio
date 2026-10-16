@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn short_blank_canvas_and_resize_keep_requested_height() {
+    let (ctx, mut app) = setup();
+    app.create_blank_sized(&ctx, 96, 1, "Test").unwrap();
+    assert_eq!(app.entries[0].effective_doc().image.dimensions(), (96, 1));
+    app.open_canvas_resize(&ctx);
+    assert_eq!(app.frame_dialog.as_ref().unwrap().frame.height, 1);
+    app.apply_framing(&ctx).unwrap();
+    assert_eq!(app.entries[0].effective_doc().image.dimensions(), (96, 1));
+}
+
+#[test]
 fn loaded_ordinary_png_opens_conversion_before_editing_and_cannot_undo_to_raw_source() {
     let (ctx, mut app) = setup();
     app.author = "Test".into();
