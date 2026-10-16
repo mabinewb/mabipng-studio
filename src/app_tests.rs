@@ -1,6 +1,237 @@
 use super::*;
 
 #[test]
+fn canvas_framing_auto_palette_off_restores_default_colors_not_custom_colors() {
+    let (ctx, mut app) = setup();
+    app.create_blank(&ctx, 128, "Test").unwrap();
+    app.set_palette_color(&ctx, 2, [10, 20, 30]).unwrap();
+    app.open_canvas_resize(&ctx);
+    app.frame_dialog.as_mut().unwrap().fix_palette = false;
+    app.apply_framing(&ctx).unwrap();
+    assert_eq!(
+        app.entries[0].effective_doc().palette,
+        [[255; 3], [192; 3], [10, 20, 30], [0; 3]]
+    );
+    assert!(!app.fix_palette);
+}
+
+#[test]
+fn resized_chat_can_overwrite_original_and_undo_after_save_restores_old_dimensions() {
+    let (ctx, mut app) = setup();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("source.png");
+    let doc = engine::new_chat(256, "Test").unwrap();
+    std::fs::write(&path, &doc.bytes).unwrap();
+    add(&mut app, &ctx, path.to_str().unwrap(), doc);
+    app.open_canvas_resize(&ctx);
+    let dialog = app.frame_dialog.as_mut().unwrap();
+    dialog.frame.set_size(129, 49);
+    dialog.frame.fit(dialog.source.image.dimensions(), true);
+    app.apply_framing(&ctx).unwrap();
+    app.save_checked_as(&ctx, true, SaveChoice::Existing);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.pending > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        app.receive(&ctx);
+    }
+    assert_eq!(app.save_ok, 1, "{:?}", app.logs);
+    assert_eq!(Document::load(&path).unwrap().image.dimensions(), (129, 49));
+    assert_eq!(
+        (
+            app.entries[0].painting.as_ref().unwrap().canvas.width,
+            app.entries[0].painting.as_ref().unwrap().canvas.height
+        ),
+        (129, 49)
+    );
+    app.paint_history(&ctx, false);
+    assert_eq!(app.entries[0].effective_doc().image.dimensions(), (256, 96));
+    assert_eq!(Document::load(&path).unwrap().image.dimensions(), (129, 49));
+    assert!(app.entries[0].has_unsaved());
+}
+
+#[test]
+fn clipboard_result_waits_until_save_or_other_dialog_finishes() {
+    let (ctx, mut app) = setup();
+    app.pending = 1;
+    app.tx.send(Event::Clipboard(Ok(ordinary()))).unwrap();
+    app.receive(&ctx);
+    assert!(app.frame_dialog.is_none());
+    assert!(app.clipboard_waiting.is_some());
+    app.pending = 0;
+    app.show_new = true;
+    app.receive(&ctx);
+    assert!(app.frame_dialog.is_none());
+    app.show_new = false;
+    app.receive(&ctx);
+    assert!(app.clipboard_waiting.is_none());
+    assert!(app.frame_dialog.is_some());
+}
+
+#[test]
+fn clipboard_framing_cancel_does_not_replace_or_change_current_document() {
+    let (ctx, mut app) = setup();
+    app.create_blank(&ctx, 128, "Test").unwrap();
+    let id = app.selected;
+    let before = app.entries[0].effective_doc().bytes.clone();
+    let raw = engine::document_from_rgba(500, 300, &[80, 120, 160, 255].repeat(500 * 300)).unwrap();
+    app.tx.send(Event::Clipboard(Ok(raw))).unwrap();
+    app.receive(&ctx);
+    assert!(app.frame_dialog.is_some());
+    assert_eq!(app.entries.len(), 1);
+    assert_eq!(app.selected, id);
+    app.frame_dialog = None;
+    assert_eq!(app.entries[0].effective_doc().bytes, before);
+    assert_eq!(app.author, "Test");
+}
+
+#[test]
+fn canvas_resize_is_one_history_step_and_saved_size_matches_pixels() {
+    let (ctx, mut app) = setup();
+    app.create_blank(&ctx, 256, "Test").unwrap();
+    app.ensure_painting(&ctx).unwrap();
+    app.entries[0].painting.as_mut().unwrap().canvas.pixels[10 * 256 + 20] = 3;
+    sync_paint(&mut app.entries[0], &ctx).unwrap();
+    let old = app.entries[0].effective_doc().bytes.clone();
+    let count = app.entries[0].undo.len();
+    app.open_canvas_resize(&ctx);
+    let d = app.frame_dialog.as_mut().unwrap();
+    assert_eq!(d.mode, PaletteMode::Keep);
+    d.frame.set_size(128, 48);
+    d.frame.offset = [-20.0, -10.0];
+    app.apply_framing(&ctx).unwrap();
+    assert_eq!(app.entries[0].undo.len(), count + 1);
+    assert_eq!(app.entries[0].painting.as_ref().unwrap().canvas.width, 128);
+    assert_eq!(
+        engine::indexed_pixels(app.entries[0].effective_doc()).unwrap()[0],
+        3
+    );
+    let output = engine::process(
+        app.entries[0].effective_doc(),
+        &app.settings_for_entry(&app.entries[0]),
+    )
+    .unwrap();
+    assert_eq!(
+        Document::from_bytes(output).unwrap().image.dimensions(),
+        (128, 48)
+    );
+    app.paint_history(&ctx, false);
+    assert_eq!(app.entries[0].effective_doc().bytes, old);
+    assert_eq!(app.entries[0].painting.as_ref().unwrap().canvas.width, 256);
+    app.paint_history(&ctx, true);
+    assert_eq!(app.entries[0].effective_doc().image.dimensions(), (128, 48));
+}
+
+#[test]
+fn framing_validation_and_save_lock_leave_editing_document_untouched() {
+    let (ctx, mut app) = setup();
+    app.create_blank(&ctx, 128, "Test").unwrap();
+    let original = app.entries[0].effective_doc().bytes.clone();
+    app.open_canvas_resize(&ctx);
+    app.frame_dialog.as_mut().unwrap().frame.width = 127;
+    assert!(app.apply_framing(&ctx).is_err());
+    assert!(app.frame_dialog.is_some());
+    assert_eq!(app.entries[0].effective_doc().bytes, original);
+    app.frame_dialog.as_mut().unwrap().frame.width = 128;
+    app.pending = 1;
+    assert!(app.apply_framing(&ctx).is_err());
+    assert_eq!(app.entries[0].effective_doc().bytes, original);
+    app.pending = 0;
+    app.frame_dialog.as_mut().unwrap().author = "invalid\nname".into();
+    assert!(app.apply_framing(&ctx).is_err());
+    assert_eq!(app.entries[0].effective_doc().bytes, original);
+}
+
+#[test]
+fn close_unsaved_document_requires_confirmation_and_keeps_disk_file() {
+    let (ctx, mut app) = setup();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("source.png");
+    let doc = chat();
+    std::fs::write(&path, &doc.bytes).unwrap();
+    add(&mut app, &ctx, path.to_str().unwrap(), doc);
+    let id = app.entries[0].id;
+    app.author = "Changed".into();
+    app.update_author();
+    app.request_close_entry(&ctx, id);
+    assert!(matches!(app.remove_request, Some(RemoveRequest::Close(_))));
+    assert_eq!(app.entries.len(), 1);
+    app.remove_request = None;
+    assert!(path.is_file());
+    app.request_close_entry(&ctx, id);
+    app.confirm_remove(&ctx).unwrap();
+    assert!(app.entries.is_empty());
+    assert!(app.selected.is_none());
+    assert!(path.is_file());
+}
+
+#[test]
+fn disk_delete_is_explicit_and_save_lock_blocks_it() {
+    let (ctx, mut app) = setup();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("source.png");
+    let neighbor = root.path().join("neighbor.png");
+    let doc = chat();
+    std::fs::write(&path, &doc.bytes).unwrap();
+    std::fs::write(&neighbor, &doc.bytes).unwrap();
+    add(&mut app, &ctx, path.to_str().unwrap(), doc);
+    app.remove_request = Some(RemoveRequest::Delete(path.clone()));
+    assert!(path.is_file());
+    app.pending = 1;
+    assert!(app.confirm_remove(&ctx).is_err());
+    assert!(path.is_file());
+    app.pending = 0;
+    app.confirm_remove(&ctx).unwrap();
+    assert!(!path.exists());
+    assert!(neighbor.is_file());
+    assert!(app.entries.is_empty());
+}
+
+#[test]
+fn framing_modal_renders_and_drag_changes_output_space_position() {
+    let (ctx, mut app) = setup();
+    app.create_blank(&ctx, 256, "Test").unwrap();
+    app.open_canvas_resize(&ctx);
+    let run = |app: &mut Studio, events| {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1000.0, 740.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |_| {
+                    app.framing_modal(&ctx);
+                });
+            },
+        );
+        output.textures_delta.clear();
+    };
+    for _ in 0..3 {
+        run(&mut app, vec![]);
+    }
+    assert!(app.frame_dialog.as_ref().unwrap().preview.is_some());
+    let (rect, scale) = app.frame_dialog.as_ref().unwrap().viewport.unwrap();
+    assert!(rect.width() > 100.0 && rect.height() > 40.0);
+    let start = rect.center();
+    run(
+        &mut app,
+        vec![egui::Event::PointerMoved(start), button(start, true)],
+    );
+    run(
+        &mut app,
+        vec![egui::Event::PointerMoved(start + Vec2::new(20.0, 10.0))],
+    );
+    let offset = app.frame_dialog.as_ref().unwrap().frame.offset;
+    assert!((offset[0] - 20.0 / scale).abs() < 0.1, "{offset:?}");
+    assert!((offset[1] - 10.0 / scale).abs() < 0.1);
+    run(&mut app, vec![button(start + Vec2::new(20.0, 10.0), false)]);
+    assert!(app.frame_dialog.as_ref().unwrap().preview.is_some());
+}
+
+#[test]
 fn auto_palette_is_reversible_and_keeps_custom_colors_and_pixels() {
     let (ctx, mut app) = setup();
     app.create_blank(&ctx, 96, "테스트").unwrap();
@@ -632,20 +863,19 @@ fn clipboard_document_can_be_promoted_to_editable_chat_without_losing_source() {
     app.clipboard_busy = true;
     app.receive(&ctx);
     assert!(!app.clipboard_busy);
+    assert!(app.entries.is_empty());
+    assert_eq!(
+        app.frame_dialog.as_ref().unwrap().source.image.as_raw(),
+        &rgba
+    );
+    assert!(app.apply_framing(&ctx).is_err());
+    app.frame_dialog.as_mut().unwrap().author = "붙여넣기".into();
+    app.apply_framing(&ctx).unwrap();
     assert_eq!(app.entries.len(), 1);
-    assert_eq!(app.entries[0].doc.image.as_raw(), &rgba);
-    assert!(app.entries[0].draft && app.author_focus);
-    app.author = "붙여넣기".into();
-    app.start_preview(&ctx);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while app.preview_busy && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-        app.receive(&ctx);
-    }
-    assert!(app.preview.is_some(), "{:?}", app.preview_error);
-    app.edit_preview(&ctx).unwrap();
+    assert!(app.entries[0].draft);
     assert!(app.entries[0].effective_doc().is_chat());
     assert_eq!(app.entries[0].doc.image.as_raw(), &rgba);
+    assert_eq!(app.entries[0].effective_doc().image.dimensions(), (256, 96));
     app.set_palette_color(&ctx, 0, [30, 40, 50]).unwrap();
     assert_eq!(app.entries[0].effective_doc().palette[0], [30, 40, 50]);
     assert_eq!(

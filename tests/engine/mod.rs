@@ -1,5 +1,33 @@
 use super::*;
 
+#[test]
+fn resized_canvas_retains_duplicate_indices_alpha_and_ancillary_metadata() {
+    let doc = indexed(
+        5,
+        2,
+        2,
+        &[[12, 34, 56], [12, 34, 56], [128; 3], [255; 3]],
+        &[0, 128, 200, 255],
+        &[0, 1, 2, 3, 0, 1, 2, 3, 0, 1],
+    );
+    let doc = Document::from_bytes(insert_before_end(&doc.bytes, b"vpAg", &[1, 2, 3, 4])).unwrap();
+    let mut pixels = vec![0; 129 * 49];
+    pixels[0] = 1;
+    pixels[129 * 49 - 1] = 3;
+    let output = resize_indexed(&doc, 129, 49, &pixels).unwrap();
+    assert_eq!(
+        raw_chunks(&doc.bytes, &[b"IHDR", b"IDAT"]),
+        raw_chunks(&output, &[b"IHDR", b"IDAT"])
+    );
+    let result = Document::from_bytes(output).unwrap();
+    assert_eq!(result.image.dimensions(), (129, 49));
+    assert_eq!(result.image.get_pixel(0, 0).0, [12, 34, 56, 128]);
+    assert_eq!(result.image.get_pixel(1, 0).0, [12, 34, 56, 0]);
+    assert_eq!(indexed_pixels(&result).unwrap(), pixels);
+    assert!(resize_indexed(&doc, 0, 49, &[]).is_err());
+    assert!(resize_indexed(&doc, 129, 49, &pixels[..100]).is_err());
+}
+
 fn settings(mode: Mode) -> Settings {
     Settings {
         mode,

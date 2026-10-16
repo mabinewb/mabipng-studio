@@ -4,6 +4,7 @@ use mabipng_studio::{
     browser,
     brush::{Canvas, Shape},
     engine::{self, Document, Mode, Settings},
+    framing::{Frame, PaletteMode, Sampling},
     raster::{self, Fragment, Region, Tool},
     storage,
 };
@@ -118,6 +119,27 @@ struct Preview {
     texture: egui::TextureHandle,
 }
 
+struct FrameDialog {
+    source: Arc<Document>,
+    texture: egui::TextureHandle,
+    target: Option<u64>,
+    frame: Frame,
+    mode: PaletteMode,
+    preserve_white: bool,
+    fix_palette: bool,
+    author: String,
+    preview: Option<Preview>,
+    error: Option<String>,
+    dirty: bool,
+    viewport: Option<(egui::Rect, f32)>,
+}
+
+#[derive(Clone)]
+enum RemoveRequest {
+    Close(u64),
+    Delete(PathBuf),
+}
+
 struct BrowserItem {
     path: PathBuf,
     texture: Option<egui::TextureHandle>,
@@ -173,6 +195,7 @@ pub struct Studio {
     new_error: Option<String>,
     new_focus: bool,
     clipboard_busy: bool,
+    clipboard_waiting: Option<Document>,
     paste_held: bool,
     save_dialog: Option<bool>,
     browser_dir: PathBuf,
@@ -186,6 +209,9 @@ pub struct Studio {
     fill_global: bool,
     fragment: Option<Fragment>,
     paste_preview: Option<egui::TextureHandle>,
+    frame_dialog: Option<FrameDialog>,
+    remove_request: Option<RemoveRequest>,
+    frame_when_ready: bool,
 }
 
 impl Studio {
@@ -252,6 +278,9 @@ impl Studio {
             fill_global: false,
             fragment: None,
             paste_preview: None,
+            frame_dialog: None,
+            remove_request: None,
+            frame_when_ready: false,
             output_dir: default_output_dir(),
             preview: None,
             preview_error: None,
@@ -282,6 +311,7 @@ impl Studio {
             new_error: None,
             new_focus: false,
             clipboard_busy: false,
+            clipboard_waiting: None,
             paste_held: false,
             save_dialog: None,
             browser_dir: default_output_dir().unwrap_or_else(|| PathBuf::from(".")),
@@ -553,7 +583,7 @@ impl Studio {
     }
 
     fn paste_image(&mut self, ctx: &egui::Context) {
-        if self.clipboard_busy {
+        if self.clipboard_busy || self.clipboard_waiting.is_some() {
             return;
         }
         self.clipboard_busy = true;
@@ -586,6 +616,8 @@ impl Studio {
             && self.save_dialog.is_none()
             && !self.confirm_discard
             && self.paste_preview.is_none()
+            && self.frame_dialog.is_none()
+            && self.remove_request.is_none()
         {
             if self.view == 3 && self.tool == Tool::Select && self.fragment.is_some() {
                 self.request_selection_paste(ctx);
@@ -799,15 +831,7 @@ impl Studio {
                     self.clipboard_busy = false;
                     match result {
                         Ok(doc) => {
-                            self.add_document(
-                                ctx,
-                                PathBuf::from(format!("클립보드_{}.png", self.next_id + 1)),
-                                doc,
-                                false,
-                            );
-                            self.view = 0;
-                            self.author_focus = self.author.is_empty();
-                            self.message("클립보드 이미지를 가져왔습니다.".into(), false);
+                            self.clipboard_waiting = Some(doc);
                         }
                         Err(error) => self.message(error, true),
                     }
@@ -863,6 +887,21 @@ impl Studio {
                     }
                 }
             }
+        }
+        self.open_waiting_clipboard(ctx);
+    }
+
+    fn open_waiting_clipboard(&mut self, ctx: &egui::Context) {
+        if self.pending == 0
+            && self.frame_dialog.is_none()
+            && self.remove_request.is_none()
+            && !self.show_new
+            && self.save_dialog.is_none()
+            && !self.confirm_discard
+            && self.paste_preview.is_none()
+            && let Some(doc) = self.clipboard_waiting.take()
+        {
+            self.open_framing(ctx, Arc::new(doc), None);
         }
     }
 
@@ -1231,6 +1270,8 @@ impl Studio {
         let mut refresh = false;
         let mut pick_folder = false;
         let mut reset = false;
+        let mut close = None;
+        let mut delete = None;
         egui::Panel::left("files")
             .exact_size(246.0)
             .resizable(false)
@@ -1304,6 +1345,18 @@ impl Studio {
                                                 .clicked()
                                             {
                                                 draft = Some(entry.id);
+                                            }
+                                            if ui
+                                                .add_enabled(
+                                                    self.pending == 0,
+                                                    egui::Button::image(
+                                                        Lucide::X.size(14.0).color(MUTED).image(),
+                                                    ),
+                                                )
+                                                .on_hover_text("문서 닫기 · 디스크 파일 유지")
+                                                .clicked()
+                                            {
+                                                close = Some(entry.id);
                                             }
                                         });
                                     }
@@ -1391,17 +1444,34 @@ impl Studio {
                                                 }
                                             })
                                             .response;
-                                        if ui
+                                        let response = ui
                                             .interact(
                                                 content.rect,
                                                 egui::Id::new(("browse-file", &item.path)),
                                                 egui::Sense::click(),
                                             )
-                                            .on_hover_text(item.path.display().to_string())
-                                            .clicked()
-                                        {
+                                            .on_hover_text(item.path.display().to_string());
+                                        if response.clicked() {
                                             open = Some(item.path.clone());
                                         }
+                                        response.context_menu(|ui| {
+                                            if ui
+                                                .add_enabled(
+                                                    self.pending == 0,
+                                                    egui::Button::image_and_text(
+                                                        Lucide::Trash2
+                                                            .size(16.0)
+                                                            .color(RED)
+                                                            .image(),
+                                                        "파일 삭제…",
+                                                    ),
+                                                )
+                                                .clicked()
+                                            {
+                                                delete = Some(item.path.clone());
+                                                ui.close();
+                                            }
+                                        });
                                     });
                                 });
                             ui.add_space(4.0);
@@ -1428,6 +1498,12 @@ impl Studio {
         }
         if let Some(id) = draft {
             self.activate_entry(id);
+        }
+        if let Some(id) = close {
+            self.request_close_entry(&ctx, id);
+        }
+        if let Some(path) = delete {
+            self.remove_request = Some(RemoveRequest::Delete(path));
         }
         if pick_folder
             && let Some(folder) = rfd::FileDialog::new()
@@ -2206,6 +2282,8 @@ impl Studio {
                 && !self.show_new
                 && self.save_dialog.is_none()
                 && self.paste_preview.is_none()
+                && self.frame_dialog.is_none()
+                && self.remove_request.is_none()
                 && !egui::Popup::is_any_open(ctx)
                 && if self.tool == Tool::Brush {
                     paint_events(
@@ -2378,6 +2456,36 @@ impl Studio {
                 ui.horizontal(|ui| {
                     ui.heading("미리보기");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_enabled_ui(self.pending == 0, |ui| {
+                            if let Some(id) = self.selected {
+                                if icon_button(ui, Lucide::X, "현재 문서 닫기 · 디스크 파일 유지")
+                                    .clicked()
+                                {
+                                    self.request_close_entry(ctx, id);
+                                }
+                                let path = self
+                                    .selected_entry()
+                                    .filter(|e| !e.generated && e.path.is_file())
+                                    .map(|e| e.path.clone());
+                                if ui
+                                    .add_enabled(
+                                        path.is_some(),
+                                        egui::Button::image(
+                                            Lucide::Trash2.size(18.0).color(MUTED).image(),
+                                        ),
+                                    )
+                                    .on_hover_text("현재 PNG 파일 삭제…")
+                                    .clicked()
+                                {
+                                    self.remove_request = path.map(RemoveRequest::Delete);
+                                }
+                                if icon_button(ui, Lucide::Crop, "캔버스 크기 및 이미지 배치")
+                                    .clicked()
+                                {
+                                    self.open_canvas_resize(ctx);
+                                }
+                            }
+                        });
                         if icon_button(ui, Lucide::RefreshCw, "미리보기 다시 생성").clicked()
                         {
                             self.invalidate();
@@ -2471,6 +2579,7 @@ impl Studio {
                         let Some(entry) = self.selected_entry() else {
                             return;
                         };
+                        let doc = entry.effective_doc();
                         ui.horizontal(|ui| {
                             ui.add(Lucide::FileImage.size(17.0).color(MUTED));
                             ui.add(
@@ -2485,7 +2594,7 @@ impl Studio {
                                 for (key, value) in [
                                     (
                                         "파일 형식",
-                                        if entry.doc.is_chat() {
+                                        if doc.is_chat() {
                                             "그림대화 PNG".into()
                                         } else {
                                             "일반 PNG".into()
@@ -2495,10 +2604,10 @@ impl Studio {
                                         "이미지",
                                         format!(
                                             "{} × {} · {}비트{}",
-                                            entry.doc.image.width(),
-                                            entry.doc.image.height(),
-                                            entry.doc.bit_depth,
-                                            if entry.doc.color_type == 3 {
+                                            doc.image.width(),
+                                            doc.image.height(),
+                                            doc.bit_depth,
+                                            if doc.color_type == 3 {
                                                 " 팔레트"
                                             } else {
                                                 ""
@@ -2507,11 +2616,20 @@ impl Studio {
                                     ),
                                     (
                                         "작성자",
-                                        entry.doc.author.clone().unwrap_or_else(|| "없음".into()),
+                                        entry
+                                            .author_override
+                                            .clone()
+                                            .or_else(|| doc.author.clone())
+                                            .unwrap_or_else(|| "없음".into()),
                                     ),
                                     (
                                         "authid",
-                                        entry.doc.authid.clone().unwrap_or_else(|| "없음".into()),
+                                        entry
+                                            .author_override
+                                            .as_ref()
+                                            .map(|s| engine::author_to_authid(s).to_string())
+                                            .or_else(|| doc.authid.clone())
+                                            .unwrap_or_else(|| "없음".into()),
                                     ),
                                 ] {
                                     ui.label(RichText::new(key).small().color(MUTED));
@@ -2643,11 +2761,19 @@ impl eframe::App for Studio {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.receive(&ctx);
+        self.open_waiting_clipboard(&ctx);
+        if self.frame_when_ready && self.selected.is_some() {
+            self.frame_when_ready = false;
+            self.open_canvas_resize(&ctx);
+        }
         self.clipboard_shortcut(&ctx);
         let modal_open = self.show_new
             || self.save_dialog.is_some()
             || self.confirm_discard
-            || self.paste_preview.is_some();
+            || self.paste_preview.is_some()
+            || self.frame_dialog.is_some()
+            || self.clipboard_waiting.is_some()
+            || self.remove_request.is_some();
         if !modal_open
             && ctx.input(|input| input.modifiers.command && input.key_pressed(egui::Key::N))
         {
@@ -2664,7 +2790,7 @@ impl eframe::App for Studio {
                 .map(|file| file.path().to_path_buf())
                 .collect::<Vec<_>>()
         });
-        if !dropped.is_empty() {
+        if !modal_open && !dropped.is_empty() {
             self.load_paths(&ctx, dropped);
         }
         if !modal_open
@@ -2703,21 +2829,31 @@ impl eframe::App for Studio {
                     "파일을 저장하고 있습니다. 완료 후 창을 닫아 주시기 바랍니다.".into(),
                     false,
                 );
-            } else if self.entries.iter().any(Entry::has_unsaved) {
+            } else if self.entries.iter().any(Entry::has_unsaved)
+                || self.frame_dialog.is_some()
+                || self.clipboard_waiting.is_some()
+            {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.finish_strokes(&ctx);
                 self.confirm_discard = true;
             }
         }
-        self.header(ui, &ctx);
-        self.footer(ui, &ctx);
-        self.file_panel(ui);
-        self.settings_panel(ui);
-        self.workspace(ui, &ctx);
-        self.new_dialog(&ctx);
-        self.save_modal(&ctx);
-        self.discard_modal(&ctx);
-        self.selection_paste_modal(&ctx);
+        ui.add_enabled_ui(!modal_open, |ui| {
+            self.header(ui, &ctx);
+            self.footer(ui, &ctx);
+            self.file_panel(ui);
+            self.settings_panel(ui);
+            self.workspace(ui, &ctx);
+        });
+        if self.confirm_discard {
+            self.discard_modal(&ctx);
+        } else {
+            self.new_dialog(&ctx);
+            self.save_modal(&ctx);
+            self.selection_paste_modal(&ctx);
+            self.framing_modal(&ctx);
+            self.remove_modal(&ctx);
+        }
         if let Some(start) = self.dirty_at {
             if start.elapsed() >= Duration::from_millis(250) {
                 self.start_preview(&ctx);
@@ -2753,6 +2889,9 @@ impl eframe::App for Studio {
         self.capture_if_requested(&ctx);
     }
 }
+
+#[path = "app_transform.rs"]
+mod transform_ui;
 
 fn make_painting(ctx: &egui::Context, doc: Arc<Document>) -> anyhow::Result<Painting> {
     let doc = Arc::new(engine::four_color_document(&doc)?);

@@ -993,10 +993,17 @@ pub fn indexed_pixels(doc: &Document) -> Result<Vec<u8>> {
 
 /// Replaces image samples only, retaining raw palette, transparency and ancillary chunks.
 pub fn paint_indexed(doc: &Document, pixels: &[u8]) -> Result<Vec<u8>> {
+    resize_indexed(doc, doc.image.width(), doc.image.height(), pixels)
+}
+
+/// Changes canvas dimensions and samples, preserving palette, transparency and metadata.
+pub fn resize_indexed(doc: &Document, width: u32, height: u32, pixels: &[u8]) -> Result<Vec<u8>> {
+    ensure!(
+        width > 0 && height > 0 && u64::from(width) * u64::from(height) <= MAX_PIXELS,
+        "캔버스 크기가 올바르지 않습니다."
+    );
     let chunks = drawable_chunks(doc)?;
     let ihdr = chunks[0].data;
-    let width = u32::from_be_bytes(ihdr[..4].try_into()?);
-    let height = u32::from_be_bytes(ihdr[4..8].try_into()?);
     let depth = ihdr[8] as usize;
     ensure!(
         pixels.len() == width as usize * height as usize,
@@ -1052,8 +1059,10 @@ pub fn paint_indexed(doc: &Document, pixels: &[u8]) -> Result<Vec<u8>> {
                 }
                 inserted = true;
             }
-        } else if chunk.kind == b"IHDR" && ihdr[12] != 0 {
+        } else if chunk.kind == b"IHDR" {
             let mut header = ihdr.to_vec();
+            header[..4].copy_from_slice(&width.to_be_bytes());
+            header[4..8].copy_from_slice(&height.to_be_bytes());
             header[12] = 0;
             push_chunk(&mut out, b"IHDR", &header);
         } else {

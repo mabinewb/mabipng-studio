@@ -3,6 +3,21 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// Only called after the GUI explicitly confirms permanent deletion of this exact PNG.
+pub fn delete_png(path: &Path) -> Result<()> {
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+    {
+        bail!("PNG 파일만 삭제할 수 있습니다.");
+    }
+    let metadata = fs::symlink_metadata(path).context("삭제할 파일을 확인할 수 없습니다.")?;
+    if !metadata.is_file() {
+        bail!("일반 PNG 파일만 삭제할 수 있습니다. 폴더와 링크는 삭제하지 않습니다.");
+    }
+    fs::remove_file(path).context("PNG 파일을 삭제하지 못했습니다.")
+}
+
 pub fn safe_name(name: &str) -> String {
     let value: String = name
         .chars()
@@ -99,6 +114,26 @@ pub fn save_existing(path: &Path, bytes: &[u8]) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_only_removes_exact_regular_png_not_neighbors_or_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target.PNG");
+        let neighbor = root.path().join("neighbor.png");
+        let text = root.path().join("notes.txt");
+        let directory = root.path().join("folder.png");
+        fs::write(&target, b"target").unwrap();
+        fs::write(&neighbor, b"neighbor").unwrap();
+        fs::write(&text, b"private").unwrap();
+        fs::create_dir(&directory).unwrap();
+        assert!(delete_png(&text).is_err());
+        assert!(delete_png(&directory).is_err());
+        delete_png(&target).unwrap();
+        assert!(!target.exists());
+        assert_eq!(fs::read(&neighbor).unwrap(), b"neighbor");
+        assert!(directory.is_dir() && text.is_file());
+        assert!(delete_png(&target).is_err());
+    }
 
     #[test]
     fn replaces_existing_file_at_same_path() {

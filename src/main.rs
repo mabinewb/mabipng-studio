@@ -8,6 +8,7 @@ fn main() -> eframe::Result {
     let mut paths = Vec::new();
     let mut screenshot = None;
     let mut painting = false;
+    let mut framing = false;
     let mut author = None;
     let mut new_canvas = None;
     let mut zoom = None;
@@ -20,6 +21,8 @@ fn main() -> eframe::Result {
             size = [1000.0, 740.0];
         } else if arg == "--paint" {
             painting = true;
+        } else if arg == "--frame" {
+            framing = true;
         } else if arg == "--new" {
             new_canvas = args
                 .next()
@@ -70,6 +73,9 @@ fn main() -> eframe::Result {
             }
             if let Some(zoom) = zoom {
                 studio.set_zoom(zoom);
+            }
+            if framing {
+                studio.start_framing();
             }
             Ok(Box::new(studio))
         }),
