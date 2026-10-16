@@ -60,6 +60,7 @@ pub fn convert_one(path: &Path, options: &Options) -> Result<PathBuf> {
         let doc = frame.render(&source, mode, &settings)?;
         Document::from_bytes(engine::process(&doc, &settings)?)?
     };
+    engine::validate_game_size(&output)?;
     let filename = format!(
         "chat_{}_{}.png",
         chrono::Local::now().format("%Y%m%d_%H%M%S"),
@@ -71,6 +72,28 @@ pub fn convert_one(path: &Path, options: &Options) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_four_color_width_creates_no_batch_output() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("source.png");
+        let source = engine::new_chat_sized(96, 1, "Test").unwrap();
+        let bytes =
+            engine::paint_indexed(&source, &(0..96).map(|i| (i % 4) as u8).collect::<Vec<_>>())
+                .unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut settings = options(root.path().join("output"));
+        let error = convert_one(&path, &settings).unwrap_err();
+        assert!(error.to_string().contains("128"));
+        assert!(!settings.output_dir.exists());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        settings.resize_existing = true;
+        settings.width = 128;
+        settings.height = 1;
+        let result = Document::load(&convert_one(&path, &settings).unwrap()).unwrap();
+        assert_eq!(engine::validate_game_size(&result).unwrap(), 4);
+        assert_eq!(result.image.dimensions(), (128, 1));
+    }
     fn options(output: PathBuf) -> Options {
         Options {
             output_dir: output,

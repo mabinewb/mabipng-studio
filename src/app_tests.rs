@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn saving_four_color_narrow_chat_is_blocked_until_repaired_to_three_colors() {
+    let (ctx, mut app) = setup();
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("source.png");
+    let source = engine::new_chat_sized(96, 1, "Test").unwrap();
+    let pixels = (0..96).map(|i| (i % 4) as u8).collect::<Vec<_>>();
+    let bytes = engine::paint_indexed(&source, &pixels).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    add(
+        &mut app,
+        &ctx,
+        path.to_str().unwrap(),
+        Document::from_bytes(bytes.clone()).unwrap(),
+    );
+    app.save_current_as(&ctx, SaveChoice::Existing);
+    assert_eq!(app.pending, 0);
+    assert!(app.error && app.status.contains("128"));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    app.ensure_painting(&ctx).unwrap();
+    for pixel in &mut app.entries[0].painting.as_mut().unwrap().canvas.pixels {
+        if *pixel == 3 {
+            *pixel = 2;
+        }
+    }
+    sync_paint(&mut app.entries[0], &ctx).unwrap();
+    app.save_current_as(&ctx, SaveChoice::Existing);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.pending > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+        app.receive(&ctx);
+    }
+    assert_eq!(app.save_ok, 1);
+    assert_eq!(
+        engine::validate_game_size(&Document::load(&path).unwrap()).unwrap(),
+        3
+    );
+}
+
+#[test]
+fn applying_four_color_narrow_conversion_requires_wider_canvas() {
+    let (ctx, mut app) = setup();
+    let source = engine::new_chat_sized(96, 1, "Test").unwrap();
+    let source = Document::from_bytes(
+        engine::paint_indexed(&source, &(0..96).map(|i| (i % 4) as u8).collect::<Vec<_>>())
+            .unwrap(),
+    )
+    .unwrap();
+    add(&mut app, &ctx, "source.png", source);
+    let before = app.entries[0].effective_doc().bytes.clone();
+    app.open_canvas_resize(&ctx);
+    assert!(app.apply_framing(&ctx).unwrap_err().contains("128"));
+    assert_eq!(app.entries[0].effective_doc().bytes, before);
+    app.frame_dialog.as_mut().unwrap().frame.set_size(128, 1);
+    app.apply_framing(&ctx).unwrap();
+    assert_eq!(
+        engine::validate_game_size(app.entries[0].effective_doc()).unwrap(),
+        4
+    );
+}
+
+#[test]
 fn short_blank_canvas_and_resize_keep_requested_height() {
     let (ctx, mut app) = setup();
     app.create_blank_sized(&ctx, 96, 1, "Test").unwrap();

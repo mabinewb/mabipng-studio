@@ -167,6 +167,7 @@ impl Studio {
             .as_ref()
             .ok_or("영역 선택 창이 열려 있지 않습니다.")?;
         let doc = dialog.render(false).map_err(|e| format!("{e:#}"))?;
+        engine::validate_game_size(&doc).map_err(|e| e.to_string())?;
         let mut painting = make_painting(ctx, Arc::new(doc)).map_err(|e| e.to_string())?;
         painting.unsaved = true;
         let target = dialog.target;
@@ -247,7 +248,11 @@ impl Studio {
             });
             egui::ScrollArea::vertical()
                 .id_salt("frame-controls-scroll")
-                .max_height((ctx.content_rect().height() - 180.0).max(200.0))
+                .max_height(
+                    (ctx.content_rect().height()
+                        - if dialog.error.is_some() { 270.0 } else { 180.0 })
+                    .max(200.0),
+                )
                 .show(ui, |ui| {
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
@@ -293,6 +298,20 @@ impl Studio {
                                 false,
                                 None,
                             );
+                            if let Some(preview) = &dialog.preview {
+                                match engine::validate_game_size(&preview.doc) {
+                                    Ok(colors) => {
+                                        ui.label(
+                                            RichText::new(format!("실제 사용 팔레트 · {colors}색"))
+                                                .small()
+                                                .color(MUTED),
+                                        );
+                                    }
+                                    Err(error) => {
+                                        ui.colored_label(RED, error.to_string());
+                                    }
+                                }
+                            }
                         });
                         ui.separator();
                         ui.vertical(|ui| {

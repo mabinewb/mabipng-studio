@@ -955,6 +955,34 @@ pub fn palette_rgba(doc: &Document) -> Vec<[u8; 4]> {
         .collect()
 }
 
+/// Counts palette entries referenced by pixels, not the registered PLTE length.
+pub fn used_palette_colors(doc: &Document) -> Result<usize> {
+    let mut used = [false; 4];
+    for index in indexed_pixels(doc)? {
+        ensure!(
+            (index as usize) < used.len(),
+            "그림대화 팔레트 범위를 벗어난 색상입니다."
+        );
+        used[index as usize] = true;
+    }
+    Ok(used.into_iter().filter(|&value| value).count())
+}
+
+/// Game size rules established by in-game testing; retain permissive editing dimensions.
+pub fn validate_game_size(doc: &Document) -> Result<usize> {
+    let (width, height) = doc.image.dimensions();
+    ensure!(
+        (1..=256).contains(&width) && (1..=96).contains(&height),
+        "그림대화 크기는 가로 1~256, 세로 1~96픽셀이어야 합니다. 현재 {width}×{height}픽셀입니다."
+    );
+    let colors = used_palette_colors(doc)?;
+    ensure!(
+        colors < 4 || width >= 128,
+        "4색을 모두 사용하는 그림대화는 가로가 128픽셀 이상이어야 합니다. 현재 {width}×{height}픽셀입니다. 가로를 늘리거나 실제 사용하는 팔레트 색을 3색 이하로 줄여 주세요."
+    );
+    Ok(colors)
+}
+
 /// Returns original, unpacked palette indices; duplicate palette entries stay distinct.
 pub fn indexed_pixels(doc: &Document) -> Result<Vec<u8>> {
     let chunks = drawable_chunks(doc)?;

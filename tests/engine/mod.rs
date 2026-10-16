@@ -1,6 +1,42 @@
 use super::*;
 
 #[test]
+fn game_size_rules_depend_on_used_indices_not_palette_length() {
+    for (width, height, indices, valid) in [
+        (1, 1, vec![3], true),
+        (1, 3, vec![1, 2, 3], true),
+        (96, 1, vec![0, 1, 3], true),
+        (1, 4, vec![0, 1, 2, 3], false),
+        (96, 1, vec![0, 1, 2, 3], false),
+        (127, 1, vec![0, 1, 2, 3], false),
+        (128, 1, vec![0, 1, 2, 3], true),
+        (256, 96, vec![0, 1, 2, 3], true),
+    ] {
+        let source = new_chat_sized(width, height, "Test").unwrap();
+        let pixels = (0..width * height)
+            .map(|i| indices[i as usize % indices.len()])
+            .collect::<Vec<_>>();
+        let doc = Document::from_bytes(paint_indexed(&source, &pixels).unwrap()).unwrap();
+        assert_eq!(doc.palette.len(), 4);
+        assert_eq!(used_palette_colors(&doc).unwrap(), indices.len());
+        assert_eq!(
+            validate_game_size(&doc).is_ok(),
+            valid,
+            "{width}x{height} with {} colors",
+            indices.len()
+        );
+    }
+    let source = new_chat(128, "Test").unwrap();
+    for (width, height) in [(257, 1), (1, 97)] {
+        let doc = Document::from_bytes(
+            resize_indexed(&source, width, height, &vec![0; (width * height) as usize]).unwrap(),
+        )
+        .unwrap();
+        assert!(validate_game_size(&doc).is_err());
+    }
+}
+
+#[test]
 fn experimental_short_canvases_include_one_by_one_and_reject_zero_height() {
     for width in [1, 3, 96, 256] {
         for height in [1, 2, 16, 47, 48, 96] {

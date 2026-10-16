@@ -1126,6 +1126,10 @@ impl Studio {
             if Some(entry.id) != self.selected {
                 continue;
             }
+            if let Err(error) = engine::validate_game_size(entry.effective_doc()) {
+                self.message(error.to_string(), true);
+                return;
+            }
             let settings = self.settings_for_entry(entry);
             if settings.author.is_none()
                 && (self.needs_author(entry.effective_doc()) || entry.generated)
@@ -1167,6 +1171,7 @@ impl Studio {
                 let result = (|| -> anyhow::Result<(PathBuf, Document)> {
                     let bytes = engine::process(&doc, &settings)?;
                     let saved_doc = Document::from_bytes(bytes.clone())?;
+                    engine::validate_game_size(&saved_doc)?;
                     if choice == SaveChoice::Existing && can_overwrite {
                         return Ok((storage::save_existing(&path, &bytes)?, saved_doc));
                     }
@@ -2706,6 +2711,18 @@ impl Studio {
                                     ui.end_row();
                                 }
                             });
+                        if doc.is_chat() {
+                            if let Ok(colors) = engine::used_palette_colors(doc) {
+                                ui.label(
+                                    RichText::new(format!("실제 사용 팔레트 · {colors}색"))
+                                        .small()
+                                        .color(MUTED),
+                                );
+                            }
+                            if let Err(error) = engine::validate_game_size(doc) {
+                                ui.colored_label(RED, error.to_string());
+                            }
+                        }
                         ui.add_space(12.0);
                         if !entry.doc.palette.is_empty() {
                             ui.label(
