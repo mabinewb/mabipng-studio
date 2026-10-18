@@ -1,6 +1,6 @@
 [package]
 name = "mabipng-studio"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
 description = "Mabinogi picture chat PNG editor"
 build = "build.rs"
@@ -21,6 +21,10 @@ image = { version = "0.25", default-features = false, features = ["png", "ico"] 
 png = "0.17"
 rfd = "0.15"
 tempfile = "3"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_Input_KeyboardAndMouse"] }

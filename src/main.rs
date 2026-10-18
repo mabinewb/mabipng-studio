@@ -76,6 +76,7 @@ fn main() -> eframe::Result {
                 Vec::new()
             };
             let mut studio = app::Studio::new(cc, paths, screenshot, painting, author);
+            studio.start_update_check(&cc.egui_ctx);
             if batch_mode {
                 studio.open_batch(&cc.egui_ctx);
                 studio.add_batch_paths(batch_paths);

@@ -6,7 +6,7 @@ use mabipng_studio::{
     engine::{self, Document, Mode, Settings},
     framing::{Frame, PaletteMode, Sampling},
     raster::{self, Fragment, Region, Tool},
-    storage,
+    storage, update,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -157,6 +157,7 @@ struct BrowserItem {
 }
 
 enum Event {
+    UpdateChecked(Result<Option<update::Release>, String>),
     BatchItem(batch::ItemResult),
     BatchDone(bool),
     Loaded(PathBuf, Result<Document, String>),
@@ -226,6 +227,8 @@ pub struct Studio {
     frame_when_ready: bool,
     conversion_queue: VecDeque<u64>,
     batch_dialog: Option<BatchDialog>,
+    update_release: Option<update::Release>,
+    update_started: bool,
 }
 
 impl Studio {
@@ -297,6 +300,8 @@ impl Studio {
             frame_when_ready: false,
             conversion_queue: VecDeque::new(),
             batch_dialog: None,
+            update_release: None,
+            update_started: false,
             output_dir: default_output_dir(),
             preview: None,
             preview_error: None,
@@ -347,6 +352,20 @@ impl Studio {
         app.load_paths(ctx, paths);
         app.refresh_browser(ctx);
         app
+    }
+
+    pub fn start_update_check(&mut self, ctx: &egui::Context) {
+        if self.update_started || self.screenshot.is_some() {
+            return;
+        }
+        self.update_started = true;
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = update::check_latest().map_err(|error| error.to_string());
+            let _ = tx.send(Event::UpdateChecked(result));
+            ctx.request_repaint();
+        });
     }
 
     fn selected_entry(&self) -> Option<&Entry> {
@@ -781,6 +800,12 @@ impl Studio {
     fn receive(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
+                Event::UpdateChecked(result) => match result {
+                    Ok(release) => self.update_release = release,
+                    Err(_) => self.logs.push(
+                        "업데이트를 확인하지 못했습니다. 다음 실행 시 다시 확인합니다.".into(),
+                    ),
+                },
                 Event::BatchItem(result) => {
                     if let Some(dialog) = &mut self.batch_dialog {
                         dialog.results.push(result);
@@ -1256,7 +1281,11 @@ impl Studio {
                 ui.horizontal_centered(|ui| {
                     ui.add(Lucide::Images.size(27.0).color(GREEN));
                     ui.label(RichText::new("MabiPNG Studio").size(22.0).strong());
-                    ui.label(RichText::new("그림대화").color(MUTED));
+                    ui.label(
+                        RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                            .small()
+                            .color(MUTED),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if command(ui, Lucide::FolderOpen, "PNG 열기", true).clicked() {
                             self.open_files(ctx);
@@ -1280,6 +1309,23 @@ impl Studio {
                     });
                 });
             });
+    }
+
+    fn update_notice(&mut self, ui: &mut egui::Ui) {
+        if let Some(release) = self.update_release.clone() {
+            egui::Panel::top("update-notice").show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!(
+                        "새 버전 v{}을 사용할 수 있습니다.",
+                        release.version
+                    ));
+                    ui.hyperlink_to("릴리즈 페이지 열기", release.url);
+                    if icon_button(ui, Lucide::X, "업데이트 안내 닫기").clicked() {
+                        self.update_release = None;
+                    }
+                });
+            });
+        }
     }
 
     fn footer(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -2917,6 +2963,7 @@ impl eframe::App for Studio {
         }
         ui.add_enabled_ui(!modal_open, |ui| {
             self.header(ui, &ctx);
+            self.update_notice(ui);
             self.footer(ui, &ctx);
             self.file_panel(ui);
             self.settings_panel(ui);

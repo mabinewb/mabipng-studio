@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn update_events_leave_document_and_edit_status_unchanged() {
+    let (ctx, mut app) = setup();
+    add(&mut app, &ctx, "source.png", chat());
+    let before = app.entries[0].effective_doc().bytes.clone();
+    let status = app.status.clone();
+    app.tx
+        .send(Event::UpdateChecked(Err("offline".into())))
+        .unwrap();
+    app.receive(&ctx);
+    assert_eq!(app.status, status);
+    assert!(!app.error);
+    assert!(app.update_release.is_none());
+    assert!(app.logs.iter().any(|log| log.contains("업데이트")));
+    let release = update::Release {
+        version: "9.0.0".parse().unwrap(),
+        url: "https://github.com/mabinewb/mabipng-studio/releases/tag/v9.0.0".into(),
+    };
+    app.tx
+        .send(Event::UpdateChecked(Ok(Some(release.clone()))))
+        .unwrap();
+    app.receive(&ctx);
+    assert_eq!(app.update_release, Some(release));
+    assert_eq!(app.entries[0].effective_doc().bytes, before);
+    assert_eq!(app.status, status);
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1000.0, 740.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            app.header(ui, &ctx);
+            app.update_notice(ui);
+        },
+    );
+    output.textures_delta.clear();
+}
+
+#[test]
 fn saving_four_color_narrow_chat_is_blocked_until_repaired_to_three_colors() {
     let (ctx, mut app) = setup();
     let root = tempfile::tempdir().unwrap();
