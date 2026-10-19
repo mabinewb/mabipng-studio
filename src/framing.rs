@@ -98,6 +98,24 @@ impl Frame {
         self.height = height;
     }
 
+    /// Largest canvas matching the source aspect ratio within the game's bounds.
+    pub fn fit_canvas_to_image(&mut self, source: (u32, u32), min_width: u32) -> Result<()> {
+        ensure!(
+            source.0 > 0 && source.1 > 0,
+            "원본 이미지 크기가 올바르지 않습니다."
+        );
+        ensure!(
+            (1..=256).contains(&min_width),
+            "캔버스 최소 너비가 올바르지 않습니다."
+        );
+        let scale = (256.0 / f64::from(source.0)).min(96.0 / f64::from(source.1));
+        self.width = (f64::from(source.0) * scale).round().clamp(1.0, 256.0) as u32;
+        self.height = (f64::from(source.1) * scale).round().clamp(1.0, 96.0) as u32;
+        self.width = self.width.max(min_width);
+        self.fit(source, false);
+        self.validate()
+    }
+
     pub fn zoom(&mut self, scale: f32) {
         self.zoom_at(scale, [self.width as f32 / 2.0, self.height as f32 / 2.0]);
     }
@@ -326,6 +344,34 @@ impl Frame {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn canvas_fit_maximizes_aspect_with_optional_four_color_minimum() {
+        use super::*;
+        let source = engine::new_chat(128, "Test").unwrap();
+        let mut frame = Frame::new(&source);
+        for (dimensions, min_width, expected) in [
+            ((100, 100), 1, (96, 96)),
+            ((100, 100), 128, (128, 96)),
+            ((400, 100), 1, (256, 64)),
+            ((100, 200), 1, (48, 96)),
+            ((100, 200), 128, (128, 96)),
+            ((1600, 900), 1, (171, 96)),
+            ((1000, 1), 1, (256, 1)),
+            ((1, 1000), 1, (1, 96)),
+        ] {
+            frame.fit_canvas_to_image(dimensions, min_width).unwrap();
+            assert_eq!((frame.width, frame.height), expected);
+            assert!(frame.offset.iter().all(|&v| v >= -0.001));
+            assert!(dimensions.0 as f32 * frame.scale <= frame.width as f32 + 0.001);
+            assert!(dimensions.1 as f32 * frame.scale <= frame.height as f32 + 0.001);
+            frame.validate().unwrap();
+        }
+        let before = frame.clone();
+        assert!(frame.fit_canvas_to_image((0, 100), 1).is_err());
+        assert!(frame.fit_canvas_to_image((100, 100), 257).is_err());
+        assert_eq!(frame, before);
+    }
+
     #[test]
     fn selected_colors_scan_crop_before_sampling_and_include_visible_matte() {
         use super::*;

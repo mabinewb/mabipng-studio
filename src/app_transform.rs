@@ -1,7 +1,28 @@
 use super::*;
 
 impl FrameDialog {
-    fn render_with_algorithm(&self, algorithm: Algorithm) -> anyhow::Result<Document> {
+    pub(super) fn fit_canvas_to_image(&mut self) -> anyhow::Result<()> {
+        let before = self.frame.clone();
+        let result = (|| {
+            let dimensions = self.source.image.dimensions();
+            self.frame.fit_canvas_to_image(dimensions, 1)?;
+            let preview = self.render(true)?;
+            if self.frame.width < 128 && engine::used_palette_colors(&preview)? == 4 {
+                self.frame.fit_canvas_to_image(dimensions, 128)?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.frame = before;
+        } else {
+            self.dirty = true;
+            self.error = None;
+            self.color_confirmation = None;
+        }
+        result
+    }
+
+    pub(super) fn render_with_algorithm(&self, algorithm: Algorithm) -> anyhow::Result<Document> {
         self.frame.render(
             &self.source,
             self.mode,
@@ -504,6 +525,13 @@ impl Studio {
                                 });
                             if (w, h) != (dialog.frame.width, dialog.frame.height) {
                                 dialog.frame.set_size(w, h);
+                            }
+                            if command(ui, Lucide::Crop, "캔버스 비율 자동 맞춤", false)
+                                .on_hover_text("원본 이미지 전체의 비율에 맞춰 캔버스를 256×96 범위에서 최대한 크게 만듭니다. 현재 변환 결과가 4색이면 최소 너비 128픽셀을 확보하며, 비율이 맞지 않는 부분은 여백으로 남깁니다. 이미지 자체는 찌그러뜨리거나 자르지 않습니다.")
+                                .clicked()
+                                && let Err(error) = dialog.fit_canvas_to_image()
+                            {
+                                dialog.error = Some(error.to_string());
                             }
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {

@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn automatic_canvas_ratio_uses_actual_output_colors_without_modifying_source() {
+    let (ctx, mut app) = setup();
+    for existing_chat in [false, true] {
+        for count in [3, 4] {
+            let base = engine::new_chat_sized(32, 32, "Test").unwrap();
+            let bytes = engine::paint_indexed(
+                &base,
+                &(0..32 * 32).map(|i| (i % count) as u8).collect::<Vec<_>>(),
+            )
+            .unwrap();
+            let chat = Document::from_bytes(bytes.clone()).unwrap();
+            let source = if existing_chat {
+                chat
+            } else {
+                engine::document_from_rgba(32, 32, chat.image.as_raw()).unwrap()
+            };
+            let original = source.bytes.clone();
+            app.open_framing(&ctx, Arc::new(source), None);
+            let dialog = app.frame_dialog.as_mut().unwrap();
+            dialog.frame.offset = [-20.0, 10.0];
+            dialog.frame.scale = 0.5;
+            dialog.fix_palette = false;
+            dialog.preserve_white = false;
+            dialog.frame.sampling = Sampling::Nearest;
+            dialog.fit_canvas_to_image().unwrap();
+            assert_eq!(dialog.frame.height, 96);
+            assert_eq!(dialog.frame.width, if count == 4 { 128 } else { 96 });
+            assert!(dialog.dirty);
+            assert_eq!(dialog.source.bytes, original);
+            let result = dialog.render_with_algorithm(dialog.algorithm).unwrap();
+            engine::validate_game_size(&result).unwrap();
+            assert_eq!(result.image.height(), 96);
+            app.cancel_framing();
+        }
+    }
+}
+
+#[test]
 fn reserved_palette_help_opens_over_label_without_changing_checkbox() {
     fn contains_help(shape: &egui::epaint::Shape) -> bool {
         match shape {
