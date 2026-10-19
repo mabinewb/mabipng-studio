@@ -132,6 +132,14 @@ struct FrameDialog {
     dirty: bool,
     viewport: Option<(egui::Rect, f32)>,
     initial_import: bool,
+    color_confirmation: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+enum ColorChoice {
+    Preserve,
+    Current,
+    Back,
 }
 
 struct BatchDialog {

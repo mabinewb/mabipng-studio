@@ -1,5 +1,128 @@
 use super::*;
 
+fn four_color_import(app: &mut Studio, ctx: &egui::Context) -> Vec<u8> {
+    let colors = [
+        [255, 255, 255, 255],
+        [192, 192, 192, 255],
+        [128, 128, 128, 255],
+        [0, 0, 0, 255],
+    ];
+    let rgba = (0..(128 * 48))
+        .flat_map(|i| colors[i % 4])
+        .collect::<Vec<_>>();
+    let source = engine::document_from_rgba(128, 48, &rgba).unwrap();
+    add(app, ctx, "ordinary.png", source);
+    app.open_framing(ctx, app.entries[0].doc.clone(), Some(app.entries[0].id));
+    let dialog = app.frame_dialog.as_mut().unwrap();
+    dialog.author = "Test".into();
+    dialog.initial_import = true;
+    rgba
+}
+
+#[test]
+fn low_color_import_waits_for_choice_and_preserves_exact_colors_through_save() {
+    let (ctx, mut app) = setup();
+    let rgba = four_color_import(&mut app, &ctx);
+    app.request_apply_framing(&ctx).unwrap();
+    assert_eq!(
+        app.frame_dialog.as_ref().unwrap().color_confirmation,
+        Some(4)
+    );
+    assert!(app.entries[0].painting.is_none());
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1000.0, 740.0),
+            )),
+            ..Default::default()
+        },
+        |_| app.framing_modal(&ctx),
+    );
+    output.textures_delta.clear();
+    app.resolve_color_choice(&ctx, ColorChoice::Preserve)
+        .unwrap();
+    assert!(app.frame_dialog.is_none());
+    let entry = &app.entries[0];
+    assert!(!entry.auto_palette);
+    assert_eq!(entry.effective_doc().image.as_raw(), &rgba);
+    let saved = engine::process(entry.effective_doc(), &app.settings_for_entry(entry)).unwrap();
+    assert_eq!(Document::from_bytes(saved).unwrap().image.as_raw(), &rgba);
+}
+
+#[test]
+fn low_color_confirmation_back_keeps_options_and_current_keeps_correction_enabled() {
+    let (ctx, mut app) = setup();
+    four_color_import(&mut app, &ctx);
+    app.request_apply_framing(&ctx).unwrap();
+    app.resolve_color_choice(&ctx, ColorChoice::Back).unwrap();
+    let dialog = app.frame_dialog.as_ref().unwrap();
+    assert!(dialog.color_confirmation.is_none());
+    assert!(dialog.fix_palette && dialog.preserve_white);
+    assert_eq!(dialog.frame.sampling, Sampling::Smooth);
+    assert!(app.entries[0].painting.is_none());
+    app.request_apply_framing(&ctx).unwrap();
+    app.resolve_color_choice(&ctx, ColorChoice::Current)
+        .unwrap();
+    assert!(app.entries[0].auto_palette);
+    assert_ne!(
+        app.entries[0].effective_doc().image.get_pixel(0, 0).0,
+        [255, 255, 255, 255]
+    );
+}
+
+#[test]
+fn low_color_import_preserve_respects_game_size_error_without_replacing_source() {
+    let (ctx, mut app) = setup();
+    four_color_import(&mut app, &ctx);
+    let before = app.entries[0].doc.bytes.clone();
+    app.frame_dialog.as_mut().unwrap().frame.width = 96;
+    app.request_apply_framing(&ctx).unwrap();
+    assert!(
+        app.resolve_color_choice(&ctx, ColorChoice::Preserve)
+            .unwrap_err()
+            .contains("128")
+    );
+    assert_eq!(app.entries[0].doc.bytes, before);
+    assert!(app.entries[0].painting.is_none());
+    let dialog = app.frame_dialog.as_ref().unwrap();
+    assert!(dialog.color_confirmation.is_none());
+    assert!(!dialog.fix_palette && !dialog.preserve_white);
+}
+
+#[test]
+fn clipboard_low_color_import_prompts_but_existing_chat_and_five_colors_do_not() {
+    let (ctx, mut app) = setup();
+    four_color_import(&mut app, &ctx);
+    app.frame_dialog.as_mut().unwrap().target = None;
+    app.request_apply_framing(&ctx).unwrap();
+    assert_eq!(
+        app.frame_dialog.as_ref().unwrap().color_confirmation,
+        Some(4)
+    );
+    app.resolve_color_choice(&ctx, ColorChoice::Preserve)
+        .unwrap();
+    assert_eq!(app.entries.len(), 2);
+    assert!(!app.entries[1].auto_palette);
+    let doc = app.entries[1].effective_doc().clone();
+    app.open_framing(&ctx, doc, Some(app.entries[1].id));
+    app.request_apply_framing(&ctx).unwrap();
+    assert!(app.frame_dialog.is_none());
+    let rgba = (0..(128 * 48))
+        .flat_map(|i| [(i % 5 * 40) as u8, 50, 80, 255])
+        .collect::<Vec<_>>();
+    let doc = engine::document_from_rgba(128, 48, &rgba).unwrap();
+    app.open_framing(&ctx, Arc::new(doc), None);
+    let dialog = app.frame_dialog.as_mut().unwrap();
+    dialog.frame.width = 128;
+    dialog.frame.height = 48;
+    dialog.frame.scale = 1.0;
+    dialog.frame.offset = [0.0, 0.0];
+    dialog.author = "Test".into();
+    app.request_apply_framing(&ctx).unwrap();
+    assert!(app.frame_dialog.is_none());
+}
+
 #[test]
 fn update_events_leave_document_and_edit_status_unchanged() {
     let (ctx, mut app) = setup();

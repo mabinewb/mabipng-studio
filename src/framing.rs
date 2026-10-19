@@ -202,6 +202,49 @@ impl Frame {
         Ok(output)
     }
 
+    /// Checks every source pixel intersecting the selected region, before resampling.
+    pub fn selected_colors(&self, source: &RgbaImage) -> Result<Option<Vec<[u8; 3]>>> {
+        self.validate()?;
+        let left = -self.offset[0] / self.scale;
+        let top = -self.offset[1] / self.scale;
+        let right = (self.width as f32 - self.offset[0]) / self.scale;
+        let bottom = (self.height as f32 - self.offset[1]) / self.scale;
+        let x0 = left.floor().clamp(0.0, source.width() as f32) as u32;
+        let y0 = top.floor().clamp(0.0, source.height() as f32) as u32;
+        let x1 = right.ceil().clamp(0.0, source.width() as f32) as u32;
+        let y1 = bottom.ceil().clamp(0.0, source.height() as f32) as u32;
+        let mut colors = Vec::new();
+        if left < 0.0
+            || top < 0.0
+            || right > source.width() as f32
+            || bottom > source.height() as f32
+        {
+            colors.push(self.background);
+        }
+        let matte = Matte {
+            image: source,
+            background: Rgba([
+                self.background[0],
+                self.background[1],
+                self.background[2],
+                255,
+            ]),
+        };
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let pixel = matte.get_pixel(x, y);
+                let color = [pixel[0], pixel[1], pixel[2]];
+                if !colors.contains(&color) {
+                    colors.push(color);
+                    if colors.len() > 4 {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        Ok(Some(colors))
+    }
+
     pub fn indexed(&self, source: &Document) -> Result<Document> {
         self.validate()?;
         ensure!(
@@ -283,6 +326,53 @@ impl Frame {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selected_colors_scan_crop_before_sampling_and_include_visible_matte() {
+        use super::*;
+        let colors = [
+            [20, 30, 40, 255],
+            [50, 60, 70, 255],
+            [80, 90, 100, 255],
+            [110, 120, 130, 255],
+            [140, 150, 160, 255],
+        ];
+        let mut source = RgbaImage::from_fn(20, 4, |x, _| Rgba(colors[(x % 4) as usize]));
+        source.put_pixel(19, 0, Rgba(colors[4]));
+        let doc = engine::document_from_rgba(20, 4, source.as_raw()).unwrap();
+        let mut frame = Frame::new(&doc);
+        frame.width = 16;
+        frame.height = 4;
+        frame.scale = 1.0;
+        frame.offset = [0.0, 0.0];
+        assert_eq!(frame.selected_colors(&source).unwrap().unwrap().len(), 4);
+        frame.width = 20;
+        assert!(frame.selected_colors(&source).unwrap().is_none());
+        // A rare fifth source color must not disappear from detection during shrink.
+        frame.width = 10;
+        frame.height = 2;
+        frame.scale = 0.5;
+        assert!(frame.selected_colors(&source).unwrap().is_none());
+        frame.width = 16;
+        frame.height = 4;
+        frame.scale = 1.0;
+        frame.offset = [1.0, 0.0];
+        assert!(frame.selected_colors(&source).unwrap().is_none());
+        frame.background = [20, 30, 40];
+        assert_eq!(frame.selected_colors(&source).unwrap().unwrap().len(), 4);
+        for pixel in source.pixels_mut() {
+            pixel[3] = 0;
+        }
+        assert_eq!(
+            frame.selected_colors(&source).unwrap(),
+            Some(vec![[20, 30, 40]])
+        );
+        frame.offset = [-100.0, -100.0];
+        assert_eq!(
+            frame.selected_colors(&source).unwrap(),
+            Some(vec![[20, 30, 40]])
+        );
+    }
+
     use super::*;
 
     #[test]

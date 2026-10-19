@@ -141,6 +141,7 @@ impl Studio {
             dirty: true,
             viewport: None,
             initial_import: false,
+            color_confirmation: None,
         });
     }
 
@@ -156,6 +157,52 @@ impl Studio {
 
     pub fn start_framing(&mut self) {
         self.frame_when_ready = true;
+    }
+
+    pub(super) fn request_apply_framing(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        if self.pending > 0 {
+            return Err("저장 중에는 적용할 수 없습니다.".into());
+        }
+        let dialog = self
+            .frame_dialog
+            .as_mut()
+            .ok_or("영역 선택 창이 열려 있지 않습니다.")?;
+        if !dialog.source.is_chat()
+            && let Some(colors) = dialog
+                .frame
+                .selected_colors(&dialog.source.image)
+                .map_err(|e| e.to_string())?
+        {
+            dialog.color_confirmation = Some(colors.len());
+            return Ok(());
+        }
+        self.apply_framing(ctx)
+    }
+
+    pub(super) fn resolve_color_choice(
+        &mut self,
+        ctx: &egui::Context,
+        choice: ColorChoice,
+    ) -> Result<(), String> {
+        let dialog = self
+            .frame_dialog
+            .as_mut()
+            .ok_or("영역 선택 창이 열려 있지 않습니다.")?;
+        if dialog.color_confirmation.take().is_none() {
+            return Err("색상 유지 확인이 열려 있지 않습니다.".into());
+        }
+        match choice {
+            ColorChoice::Back => return Ok(()),
+            ColorChoice::Preserve => {
+                dialog.mode = PaletteMode::Adaptive;
+                dialog.frame.sampling = Sampling::Nearest;
+                dialog.preserve_white = false;
+                dialog.fix_palette = false;
+                dialog.dirty = true;
+            }
+            ColorChoice::Current => {}
+        }
+        self.apply_framing(ctx)
     }
 
     pub(super) fn apply_framing(&mut self, ctx: &egui::Context) -> Result<(), String> {
@@ -223,7 +270,24 @@ impl Studio {
         };
         let mut apply = false;
         let mut cancel = false;
+        let mut color_choice = None;
         egui::Modal::new(egui::Id::new("frame-image")).show(ctx, |ui| {
+            if let Some(colors) = dialog.color_confirmation {
+                ui.set_width(520.0);
+                ui.heading("원본 색상을 유지하시겠습니까?");
+                ui.label(format!("선택 영역과 여백이 {colors}색으로 이루어져 있습니다."));
+                ui.label("보정 옵션을 끄고 원본 색상으로 그림대화를 변환하시겠습니까?");
+                ui.label("원본 유지 시 픽셀 유지 방식으로 배치하며, 흰 배경 분리와 예약 색상 자동 보정을 끕니다.");
+                ui.label("크기와 배치는 유지됩니다. 축소나 잘라내기로 일부 픽셀이 사라질 수 있습니다.");
+                ui.label("투명 영역은 여백 색상과 합성한 결과를 기준으로 확인합니다.");
+                ui.separator();
+                ui.horizontal_wrapped(|ui| {
+                    if command(ui, Lucide::Check, "원본 색상 유지", true).clicked() { color_choice = Some(ColorChoice::Preserve); }
+                    if command(ui, Lucide::Palette, "현재 옵션으로 변환", false).clicked() { color_choice = Some(ColorChoice::Current); }
+                    if command(ui, Lucide::ArrowLeft, "돌아가기", false).clicked() { color_choice = Some(ColorChoice::Back); }
+                });
+                return;
+            }
             let width = (ctx.content_rect().width() - 64.0).clamp(600.0, 900.0);
             ui.set_width(width);
             ui.horizontal(|ui| {
@@ -493,11 +557,23 @@ impl Studio {
                 cancel = command(ui, Lucide::X, "취소", false).clicked();
             });
         });
-        if apply && let Err(error) = self.apply_framing(ctx) {
+        if apply && let Err(error) = self.request_apply_framing(ctx) {
             self.frame_dialog.as_mut().unwrap().error = Some(error);
         }
-        if cancel || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && self
+                .frame_dialog
+                .as_ref()
+                .is_some_and(|d| d.color_confirmation.is_some())
+        {
+            color_choice = Some(ColorChoice::Back);
+        } else if cancel || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.cancel_framing();
+        }
+        if let Some(choice) = color_choice
+            && let Err(error) = self.resolve_color_choice(ctx, choice)
+        {
+            self.frame_dialog.as_mut().unwrap().error = Some(error);
         }
         if self.frame_dialog.as_ref().is_some_and(|d| d.dirty) {
             ctx.request_repaint();
