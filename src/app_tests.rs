@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn reserved_palette_help_opens_over_label_without_changing_checkbox() {
+    fn contains_help(shape: &egui::epaint::Shape) -> bool {
+        match shape {
+            egui::epaint::Shape::Text(text) => text.galley.text().contains("채팅 배경색"),
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().any(contains_help),
+            _ => false,
+        }
+    }
+    let ctx = egui::Context::default();
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        ctx.style_mut_of(theme, |style| style.interaction.tooltip_delay = 0.0);
+    }
+    let mut checked = true;
+    let mut label_point = egui::Pos2::ZERO;
+    let mut seen = false;
+    for frame in 0..4 {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(800.0, 600.0),
+                )),
+                time: Some(frame as f64),
+                events: if frame == 0 {
+                    vec![]
+                } else {
+                    vec![egui::Event::PointerMoved(label_point)]
+                },
+                ..Default::default()
+            },
+            |ui| {
+                let response =
+                    reserved_palette_checkbox(ui, &mut checked, true, "예약 색상 자동 보정");
+                label_point = egui::pos2(response.rect.right() - 12.0, response.rect.center().y);
+            },
+        );
+        seen |= output
+            .shapes
+            .iter()
+            .any(|shape| contains_help(&shape.shape));
+        output.textures_delta.clear();
+    }
+    assert!(seen, "hovering checkbox text should show the explanation");
+    assert!(checked, "hovering must not toggle the option");
+}
+
+#[test]
 fn algorithm_comparisons_match_selected_preview_and_applied_pixels() {
     let (ctx, mut app) = setup();
     let rgba = (0..128 * 48)

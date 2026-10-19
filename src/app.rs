@@ -19,6 +19,12 @@ const GREEN: Color32 = Color32::from_rgb(24, 119, 91);
 const MUTED: Color32 = Color32::from_rgb(108, 115, 120);
 const RED: Color32 = Color32::from_rgb(180, 50, 66);
 const RAW_PALETTE: [[u8; 3]; 4] = [[255; 3], [192; 3], [128; 3], [0; 3]];
+const RESERVED_COLORS_HELP: &str = "게임에서 아래 네 색상은 캐릭터 채팅 배경색의 영향을 받아 다르게 보일 수 있습니다. 이를 피하도록 거의 같은 색상으로 바꿉니다.\n#FFFFFF → #FEFEFE\n#C0C0C0 → #C1C1C1\n#808080 → #818181\n#000000 → #010101\n다른 색상은 보정하지 않습니다. 기존 그림대화의 팔레트 편집에서 체크를 끄면 대응하는 보정 색상을 기본 색상으로 되돌립니다.";
+const WHITE_BACKGROUND_HELP: &str = "테두리와 연결된 밝은 배경을 별도로 처리합니다. 적용되면 배경에 팔레트 1색을 배정하고 나머지 그림을 3색으로 변환합니다. 원래의 흰색이나 밝은 배경색이 달라질 수 있습니다.";
+const SAMPLING_HELP: &str = "픽셀 유지: 원본 픽셀의 색을 섞지 않고 크기를 조절합니다. 픽셀 그림이나 원본 색상 유지에 적합합니다.\n부드럽게 축소: 주변 색상을 섞어 거친 가장자리를 줄입니다. 중간색이 생겨 최종 4색 팔레트가 달라질 수 있습니다.";
+const PALETTE_MODE_HELP: &str = "원본 팔레트 유지: 기존 그림대화의 팔레트와 픽셀 인덱스를 유지합니다.\n이미지에 맞춘 4색: 선택한 알고리즘으로 이미지의 대표 색상을 고릅니다.\n기본 회색조 4색: 지정된 흰색·회색·검정 팔레트에 맞춥니다.";
+const COMPARISON_HELP: &str = "현재 영역과 동일한 보정 옵션으로 네 알고리즘의 변환 결과를 비교합니다. 이미지나 라디오 버튼을 클릭하면 해당 결과를 선택합니다. 체크를 끄면 선택한 결과를 크게 볼 수 있습니다.";
+const MATTE_HELP: &str = "이미지가 덮지 않는 캔버스 부분에 사용할 색상입니다. 일반 이미지를 변환할 때 투명한 픽셀도 이 색상 위에 합성됩니다. 여백 색상도 최종 색상 수에 포함됩니다.";
 
 struct Entry {
     id: u64,
@@ -1653,15 +1659,25 @@ impl Studio {
                     .id_salt("settings-scroll")
                     .show(ui, |ui| {
                         section(ui, Lucide::UserRound, "작성자");
-                        let response = ui.add_enabled(self.pending == 0,
+                        let response = ui.add_enabled(
+                            self.pending == 0,
                             egui::TextEdit::singleline(&mut self.author)
                                 .hint_text("새 그림대화의 닉네임")
                                 .background_color(Color32::from_rgb(242, 245, 244))
                                 .margin(Vec2::new(8.0, 8.0))
                                 .desired_width(f32::INFINITY),
                         );
-                        if response.changed() { self.update_author(); }
-                        if response.lost_focus() && let Some(entry) = self.entries.iter_mut().find(|e| Some(e.id) == self.selected) { entry.author_edit = false; }
+                        if response.changed() {
+                            self.update_author();
+                        }
+                        if response.lost_focus()
+                            && let Some(entry) = self
+                                .entries
+                                .iter_mut()
+                                .find(|e| Some(e.id) == self.selected)
+                        {
+                            entry.author_edit = false;
+                        }
                         if self.author_focus {
                             response.request_focus();
                             self.author_focus = false;
@@ -1684,8 +1700,17 @@ impl Studio {
                         ui.add_space(14.0);
                         section(ui, Lucide::Palette, "팔레트");
                         self.palette_editor(ui);
-                        if ui.add_enabled(self.pending == 0, egui::Checkbox::new(&mut self.fix_palette, "팔레트 자동 보정")).on_hover_text("#FFFFFF ↔ #FEFEFE\n#C0C0C0 ↔ #C1C1C1\n#808080 ↔ #818181\n#000000 ↔ #010101").changed() {
-                            if let Err(error) = self.apply_auto_palette(ui.ctx()) { self.message(error, true); }
+                        if reserved_palette_checkbox(
+                            ui,
+                            &mut self.fix_palette,
+                            self.pending == 0,
+                            "팔레트 자동 보정",
+                        )
+                        .changed()
+                        {
+                            if let Err(error) = self.apply_auto_palette(ui.ctx()) {
+                                self.message(error, true);
+                            }
                             changed = true;
                         }
                         ui.add_space(14.0);
@@ -2261,10 +2286,12 @@ impl Studio {
                 delete = icon_button(ui, Lucide::Trash2, "선택 영역 비우기 · Delete").clicked();
             }
             if self.tool == Tool::Fill {
-                ui.checkbox(&mut self.fill_global, "이미지 전체의 같은 색");
+                ui.checkbox(&mut self.fill_global, "이미지 전체의 같은 색")
+                    .on_hover_text("켜면 클릭한 위치와 같은 팔레트 색상을 이미지 전체에서 바꿉니다. 끄면 클릭한 위치와 이어진 영역만 채웁니다.");
             }
             if matches!(self.tool, Tool::Rectangle | Tool::Ellipse) {
-                ui.checkbox(&mut self.shape_filled, "도형 내부 채우기");
+                ui.checkbox(&mut self.shape_filled, "도형 내부 채우기")
+                    .on_hover_text("켜면 사각형이나 타원의 내부까지 선택한 색으로 채웁니다. 끄면 테두리만 그립니다.");
             }
             for (shape, icon, title) in [
                 (Shape::Circle, Lucide::Circle, "원형 브러시"),
@@ -2363,13 +2390,14 @@ impl Studio {
             }
             ui.add_space(8.0);
             ui.spacing_mut().slider_width = 90.0;
-            ui.add(egui::Slider::new(&mut self.brush_size, 1..=64).suffix(" px"));
+            ui.add(egui::Slider::new(&mut self.brush_size, 1..=64).suffix(" px"))
+                .on_hover_text("브러시 크기를 원본 이미지의 픽셀 단위로 지정합니다. 화면 확대 배율과는 별개입니다.");
             if ui
                 .add(
                     egui::Button::image(Lucide::Grid2x2.size(17.0).color(MUTED).image())
                         .selected(self.pixel_grid),
                 )
-                .on_hover_text("픽셀 격자")
+                .on_hover_text("픽셀 경계선을 표시하거나 숨깁니다. 화면 표시만 바뀌며 저장되는 이미지에는 포함되지 않습니다.")
                 .clicked()
             {
                 self.pixel_grid = !self.pixel_grid;
@@ -3422,6 +3450,16 @@ fn primary_button(icon: Lucide, text: &str) -> egui::Button<'static> {
     )
     .fill(GREEN)
     .min_size(Vec2::new(100.0, 36.0))
+}
+
+fn reserved_palette_checkbox(
+    ui: &mut egui::Ui,
+    checked: &mut bool,
+    enabled: bool,
+    label: &str,
+) -> egui::Response {
+    ui.add_enabled(enabled, egui::Checkbox::new(checked, label))
+        .on_hover_text(RESERVED_COLORS_HELP)
 }
 
 fn icon_button(ui: &mut egui::Ui, icon: Lucide, tooltip: &str) -> egui::Response {

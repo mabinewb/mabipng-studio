@@ -197,8 +197,8 @@ impl Studio {
                             ui.checkbox(
                                 &mut dialog.options.replace_existing_author,
                                 "기존 그림대화 작성자도 변경",
-                            );
-                            ui.checkbox(&mut dialog.options.fix_palette, "예약 색상 자동 보정");
+                            ).on_hover_text("켜면 기존 그림대화의 작성자도 입력한 이름으로 바꿉니다. 끄면 기존 작성자를 유지하고 새 그림대화에만 입력한 이름을 사용합니다.");
+                            reserved_palette_checkbox(ui, &mut dialog.options.fix_palette, true, "예약 색상 자동 보정");
                             ui.add_space(8.0);
                             section(ui, Lucide::FolderOpen, "저장 폴더");
                             ui.add(
@@ -229,13 +229,13 @@ impl Studio {
                                 );
                             });
                             ui.horizontal(|ui| {
-                                ui.radio_value(&mut dialog.options.cover, false, "전체 맞춤");
-                                ui.radio_value(&mut dialog.options.cover, true, "채우기");
+                                ui.radio_value(&mut dialog.options.cover, false, "전체 맞춤").on_hover_text("이미지 전체가 캔버스 안에 들어오도록 비율을 유지해 배치합니다. 비율이 다르면 여백이 생깁니다.");
+                                ui.radio_value(&mut dialog.options.cover, true, "채우기").on_hover_text("여백 없이 캔버스를 채우도록 비율을 유지해 배치합니다. 캔버스 밖으로 나간 이미지 부분은 잘립니다.");
                             });
                             ui.checkbox(
                                 &mut dialog.options.resize_existing,
                                 "기존 그림대화 크기도 변경",
-                            );
+                            ).on_hover_text("켜면 기존 그림대화도 지정한 캔버스 크기와 배치 방식으로 조절합니다. 끄면 기존 그림대화의 크기를 유지합니다. 원본은 덮어쓰지 않고 새 파일로 저장합니다.");
                             egui::ComboBox::from_id_salt("batch-palette")
                                 .selected_text(if dialog.options.palette == PaletteMode::Default {
                                     "일반 이미지: 기본 회색조 4색"
@@ -253,7 +253,7 @@ impl Studio {
                                         PaletteMode::Default,
                                         "기본 회색조 4색",
                                     );
-                                });
+                                }).response.on_hover_text(PALETTE_MODE_HELP);
                             ui.add_enabled_ui(
                                 dialog.options.palette == PaletteMode::Adaptive,
                                 |ui| {
@@ -265,9 +265,9 @@ impl Studio {
                                                     &mut dialog.options.algorithm,
                                                     algorithm,
                                                     algorithm.label(),
-                                                );
+                                                ).on_hover_text(algorithm.description());
                                             }
-                                        });
+                                        }).response.on_hover_text(dialog.options.algorithm.description());
                                 },
                             );
                             egui::ComboBox::from_id_salt("batch-sampling")
@@ -287,14 +287,14 @@ impl Studio {
                                         Sampling::Smooth,
                                         "부드럽게 축소",
                                     );
-                                });
+                                }).response.on_hover_text(SAMPLING_HELP);
                             ui.add_enabled(
                                 dialog.options.palette == PaletteMode::Adaptive,
                                 egui::Checkbox::new(
                                     &mut dialog.options.preserve_white,
                                     "흰 배경 분리",
                                 ),
-                            );
+                            ).on_hover_text(WHITE_BACKGROUND_HELP).on_disabled_hover_text("흰 배경 분리는 '이미지에 맞춘 4색' 모드에서 사용할 수 있습니다.");
                         });
                     });
                     for result in dialog.results.iter().filter(|r| r.output.is_err()) {

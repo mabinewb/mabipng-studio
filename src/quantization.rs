@@ -20,6 +20,23 @@ impl Algorithm {
             Self::ExoQuant => "ExoQuant",
         }
     }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::NeuQuant => {
+                "기존 변환 방식입니다. NeuQuant로 후보색을 만든 뒤 4색으로 줄이고 색상 군집과 밝은 색을 추가 보정합니다."
+            }
+            Self::Wu => {
+                "Oklab 색 공간에서 색상 분포를 나누어 대표 팔레트를 만듭니다. 다른 방식과 색 배분이 어떻게 달라지는지 미리보기로 비교해 주세요."
+            }
+            Self::Kmeans => {
+                "Oklab 색 공간에서 비슷한 색을 군집으로 묶어 대표 팔레트를 만듭니다. Wu보다 계산 시간이 길어질 수 있습니다."
+            }
+            Self::ExoQuant => {
+                "ExoQuant의 색상 분할과 K-means 최적화로 대표 팔레트를 만듭니다. 기존 방식과 다른 색 배분을 비교할 수 있습니다."
+            }
+        }
+    }
 }
 
 pub(crate) fn generate(

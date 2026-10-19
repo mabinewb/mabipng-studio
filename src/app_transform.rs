@@ -437,7 +437,7 @@ impl Studio {
                                 for row in dialog.comparisons.chunks(2) {
                                     ui.columns(2, |columns| {
                                         for (column, (algorithm, result)) in columns.iter_mut().zip(row) {
-                                            if column.radio(dialog.algorithm == *algorithm, algorithm.label()).clicked() {
+                                            if column.radio(dialog.algorithm == *algorithm, algorithm.label()).on_hover_text(algorithm.description()).clicked() {
                                                 chosen = Some(*algorithm);
                                             }
                                             match result {
@@ -447,7 +447,7 @@ impl Studio {
                                                     if column.add(egui::Image::new(&preview.texture)
                                                         .fit_to_exact_size(size * factor)
                                                         .texture_options(egui::TextureOptions::NEAREST)
-                                                        .sense(egui::Sense::click())).clicked() {
+                                                        .sense(egui::Sense::click())).on_hover_text(format!("{}\n클릭하면 이 변환 결과를 선택합니다.", algorithm.description())).clicked() {
                                                         chosen = Some(*algorithm);
                                                     }
                                                     if let Err(error) = engine::validate_game_size(&preview.doc) {
@@ -507,15 +507,15 @@ impl Studio {
                             }
                             ui.add_space(8.0);
                             ui.horizontal(|ui| {
-                                if icon_button(ui, Lucide::Minimize, "전체 이미지 맞춤").clicked()
+                                if icon_button(ui, Lucide::Minimize, "전체 이미지 맞춤 · 비율을 유지해 이미지 전체를 넣습니다. 남는 부분에는 여백이 생깁니다.").clicked()
                                 {
                                     dialog.frame.fit(dialog.source.image.dimensions(), false);
                                 }
-                                if icon_button(ui, Lucide::Maximize, "캔버스 채우기").clicked()
+                                if icon_button(ui, Lucide::Maximize, "캔버스 채우기 · 여백 없이 채웁니다. 캔버스 밖으로 나간 부분은 잘립니다.").clicked()
                                 {
                                     dialog.frame.fit(dialog.source.image.dimensions(), true);
                                 }
-                                if icon_button(ui, Lucide::Scan, "원본 배율 100%").clicked() {
+                                if icon_button(ui, Lucide::Scan, "원본 배율 100% · 원본의 1픽셀을 캔버스의 1픽셀로 배치합니다.").clicked() {
                                     dialog.frame.scale = 1.0;
                                     dialog.frame.center(dialog.source.image.dimensions());
                                 }
@@ -536,18 +536,19 @@ impl Studio {
                                         .logarithmic(true)
                                         .text("배율 %"),
                                 )
+                                .on_hover_text("캔버스 크기는 그대로 두고 이미지의 배율만 조절합니다. 캔버스 밖으로 나간 부분은 잘립니다.")
                                 .changed()
                             {
                                 dialog.frame.zoom(percent / 100.0);
                             }
                             ui.horizontal(|ui| {
-                                ui.label("X");
+                                ui.label("X").on_hover_text("캔버스 왼쪽 위를 기준으로 한 이미지의 가로 위치입니다. 음수이면 왼쪽으로 이동합니다.");
                                 ui.add(
                                     egui::DragValue::new(&mut dialog.frame.offset[0])
                                         .speed(0.5)
                                         .range(-1e6..=1e6),
                                 );
-                                ui.label("Y");
+                                ui.label("Y").on_hover_text("캔버스 왼쪽 위를 기준으로 한 이미지의 세로 위치입니다. 음수이면 위쪽으로 이동합니다.");
                                 ui.add(
                                     egui::DragValue::new(&mut dialog.frame.offset[1])
                                         .speed(0.5)
@@ -582,7 +583,7 @@ impl Studio {
                                         PaletteMode::Default,
                                         "기본 회색조 4색",
                                     );
-                                });
+                                }).response.on_hover_text(PALETTE_MODE_HELP);
                             if dialog.mode == PaletteMode::Keep {
                                 dialog.frame.sampling = Sampling::Nearest;
                             }
@@ -594,11 +595,11 @@ impl Studio {
                                     .width(236.0)
                                     .show_ui(ui, |ui| {
                                         for algorithm in Algorithm::ALL {
-                                            ui.selectable_value(&mut dialog.algorithm, algorithm, algorithm.label());
+                                            ui.selectable_value(&mut dialog.algorithm, algorithm, algorithm.label()).on_hover_text(algorithm.description());
                                         }
-                                    });
+                                    }).response.on_hover_text(dialog.algorithm.description());
                                 options_changed |= before != dialog.algorithm;
-                                options_changed |= ui.checkbox(&mut dialog.compare_algorithms, "알고리즘 비교 미리보기").changed();
+                                options_changed |= ui.checkbox(&mut dialog.compare_algorithms, "알고리즘 비교 미리보기").on_hover_text(COMPARISON_HELP).changed();
                             });
                             ui.add_enabled_ui(dialog.mode != PaletteMode::Keep, |ui| {
                                 egui::ComboBox::from_id_salt("framing-sampling")
@@ -618,19 +619,19 @@ impl Studio {
                                             Sampling::Smooth,
                                             "부드럽게 축소",
                                         );
-                                    });
+                                    }).response.on_hover_text(SAMPLING_HELP);
                             });
                             options_changed |= ui
                                 .add_enabled(
                                     dialog.mode == PaletteMode::Adaptive,
                                     egui::Checkbox::new(&mut dialog.preserve_white, "흰 배경 분리"),
                                 )
+                                .on_hover_text(WHITE_BACKGROUND_HELP)
+                                .on_disabled_hover_text("흰 배경 분리는 '이미지에 맞춘 4색' 모드에서 사용할 수 있습니다.")
                                 .changed();
-                            options_changed |= ui
-                                .checkbox(&mut dialog.fix_palette, "예약 색상 자동 보정")
-                                .changed();
+                            options_changed |= reserved_palette_checkbox(ui, &mut dialog.fix_palette, true, "예약 색상 자동 보정").changed();
                             ui.horizontal(|ui| {
-                                ui.label("여백 색상");
+                                ui.label("여백 색상").on_hover_text(MATTE_HELP);
                                 if dialog.mode == PaletteMode::Keep {
                                     for (i, &rgb) in dialog.source.palette.iter().enumerate() {
                                         if ui
@@ -649,7 +650,7 @@ impl Studio {
                                         }
                                     }
                                 } else {
-                                    ui.color_edit_button_srgb(&mut dialog.frame.background);
+                                    ui.color_edit_button_srgb(&mut dialog.frame.background).on_hover_text(MATTE_HELP);
                                 }
                             });
                             dialog.dirty |= before != dialog.frame || options_changed;
