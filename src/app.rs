@@ -1338,7 +1338,11 @@ impl Studio {
                         "새 버전 v{}을 사용할 수 있습니다.",
                         release.version
                     ));
-                    ui.hyperlink_to("릴리즈 페이지 열기", release.url);
+                    release_page_link(ui, &release.url);
+                    if icon_button(ui, Lucide::Copy, "릴리즈 페이지 주소 복사").clicked()
+                    {
+                        ui.ctx().copy_text(release.url.clone());
+                    }
                     if icon_button(ui, Lucide::X, "업데이트 안내 닫기").clicked() {
                         self.update_release = None;
                     }
@@ -3450,6 +3454,11 @@ fn primary_button(icon: Lucide, text: &str) -> egui::Button<'static> {
     )
     .fill(GREEN)
     .min_size(Vec2::new(100.0, 36.0))
+}
+
+fn release_page_link(ui: &mut egui::Ui, url: &str) -> egui::Response {
+    ui.hyperlink_to("릴리즈 페이지 열기", url)
+        .on_hover_text("기본 웹 브라우저에서 새 버전의 GitHub 릴리즈 페이지를 엽니다.")
 }
 
 fn reserved_palette_checkbox(

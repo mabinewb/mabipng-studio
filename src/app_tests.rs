@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn update_notice_link_click_emits_browser_open_request() {
+    let (ctx, mut app) = setup();
+    let url = "https://github.com/mabinewb/mabipng-studio/releases/tag/v9.0.0";
+    app.update_release = Some(update::Release {
+        version: "9.0.0".parse().unwrap(),
+        url: url.into(),
+    });
+    let mut position = egui::Pos2::ZERO;
+    let mut opened = false;
+    for frame in 0..6 {
+        let events = match frame {
+            0 => vec![],
+            1..=3 => vec![egui::Event::PointerMoved(position)],
+            4 => vec![button(position, true)],
+            _ => vec![button(position, false)],
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1000.0, 740.0),
+                )),
+                time: Some(frame as f64 / 60.0),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                position = release_page_link(ui, url).rect.center();
+            },
+        );
+        opened |=
+            output.platform_output.commands.iter().any(
+                |command| matches!(command,egui::OutputCommand::OpenUrl(open) if open.url == url),
+            );
+        output.textures_delta.clear();
+    }
+    assert!(
+        opened,
+        "clicking the update link must request the default browser"
+    );
+    assert!(app.update_release.is_some());
+}
+
+#[test]
 fn automatic_canvas_ratio_uses_actual_output_colors_without_modifying_source() {
     let (ctx, mut app) = setup();
     for existing_chat in [false, true] {
