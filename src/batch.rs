@@ -2,6 +2,7 @@
 use crate::{
     engine::{self, Document, Mode, Settings},
     framing::{Frame, PaletteMode, Sampling},
+    quantization::Algorithm,
     storage,
 };
 use anyhow::{Result, ensure};
@@ -9,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
 pub struct Options {
+    pub algorithm: Algorithm,
     pub output_dir: PathBuf,
     pub author: String,
     pub replace_existing_author: bool,
@@ -35,6 +37,7 @@ pub fn convert_one(path: &Path, options: &Options) -> Result<PathBuf> {
     );
     let source = Document::load(path)?;
     let settings = Settings {
+        algorithm: options.algorithm,
         mode: Mode::Auto,
         author: if !source.is_chat() || options.replace_existing_author {
             Some(options.author.clone())
@@ -96,6 +99,7 @@ mod tests {
     }
     fn options(output: PathBuf) -> Options {
         Options {
+            algorithm: Algorithm::default(),
             output_dir: output,
             author: "New Author".into(),
             replace_existing_author: false,

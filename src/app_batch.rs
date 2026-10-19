@@ -9,6 +9,7 @@ impl Studio {
         self.batch_dialog = Some(BatchDialog {
             paths: Vec::new(),
             options: batch::Options {
+                algorithm: Algorithm::default(),
                 output_dir: self
                     .output_dir
                     .clone()
@@ -253,6 +254,22 @@ impl Studio {
                                         "기본 회색조 4색",
                                     );
                                 });
+                            ui.add_enabled_ui(
+                                dialog.options.palette == PaletteMode::Adaptive,
+                                |ui| {
+                                    egui::ComboBox::from_id_salt("batch-algorithm")
+                                        .selected_text(dialog.options.algorithm.label())
+                                        .show_ui(ui, |ui| {
+                                            for algorithm in Algorithm::ALL {
+                                                ui.selectable_value(
+                                                    &mut dialog.options.algorithm,
+                                                    algorithm,
+                                                    algorithm.label(),
+                                                );
+                                            }
+                                        });
+                                },
+                            );
                             egui::ComboBox::from_id_salt("batch-sampling")
                                 .selected_text(if dialog.options.sampling == Sampling::Nearest {
                                     "픽셀 유지"

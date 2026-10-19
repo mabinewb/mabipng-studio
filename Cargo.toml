@@ -10,6 +10,9 @@ anyhow = "1"
 arboard = "3.7"
 chrono = "0.4"
 color_quant = "1.1"
+quantette = { version = "0.6", default-features = false, features = ["std", "kmeans"] }
+palette = { version = "0.7", default-features = false, features = ["std"] }
+exoquant = "0.2"
 crc32fast = "1"
 dirs = "6"
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "accesskit"] }

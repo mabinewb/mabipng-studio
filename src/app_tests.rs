@@ -1,5 +1,60 @@
 use super::*;
 
+#[test]
+fn algorithm_comparisons_match_selected_preview_and_applied_pixels() {
+    let (ctx, mut app) = setup();
+    let rgba = (0..128 * 48)
+        .flat_map(|i| {
+            [
+                (i % 128 * 2) as u8,
+                (i / 128 * 5) as u8,
+                (i % 199) as u8,
+                255,
+            ]
+        })
+        .collect::<Vec<_>>();
+    let source = Arc::new(engine::document_from_rgba(128, 48, &rgba).unwrap());
+    app.open_framing(&ctx, source, None);
+    let dialog = app.frame_dialog.as_mut().unwrap();
+    dialog.author = "Test".into();
+    dialog.frame.width = 128;
+    dialog.frame.height = 48;
+    dialog.frame.scale = 1.0;
+    dialog.frame.offset = [0.0, 0.0];
+    dialog.compare_algorithms = true;
+    dialog.preserve_white = false;
+    dialog.rebuild_comparisons(&ctx);
+    assert_eq!(dialog.comparisons.len(), 4);
+    assert!(dialog.comparisons.iter().all(|(_, result)| result.is_ok()));
+    for (algorithm, result) in &dialog.comparisons {
+        let preview = result.as_ref().unwrap();
+        assert!(preview.doc.is_chat(), "{algorithm:?}");
+        assert!(preview.doc.palette.len() <= 4);
+    }
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1000.0, 740.0),
+            )),
+            ..Default::default()
+        },
+        |_| app.framing_modal(&ctx),
+    );
+    output.textures_delta.clear();
+    let dialog = app.frame_dialog.as_mut().unwrap();
+    let result = dialog.comparisons.last().unwrap().1.as_ref().unwrap();
+    let expected = result.doc.image.clone();
+    dialog.algorithm = Algorithm::ExoQuant;
+    dialog.preview = Some(Preview {
+        texture: result.texture.clone(),
+        doc: Document::from_bytes(result.doc.bytes.clone()).unwrap(),
+    });
+    dialog.dirty = false;
+    app.apply_framing(&ctx).unwrap();
+    assert_eq!(app.entries.last().unwrap().effective_doc().image, expected);
+}
+
 fn four_color_import(app: &mut Studio, ctx: &egui::Context) -> Vec<u8> {
     let colors = [
         [255, 255, 255, 255],

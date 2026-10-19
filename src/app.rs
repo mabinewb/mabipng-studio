@@ -5,6 +5,7 @@ use mabipng_studio::{
     brush::{Canvas, Shape},
     engine::{self, Document, Mode, Settings},
     framing::{Frame, PaletteMode, Sampling},
+    quantization::Algorithm,
     raster::{self, Fragment, Region, Tool},
     storage, update,
 };
@@ -119,6 +120,9 @@ struct Preview {
 }
 
 struct FrameDialog {
+    algorithm: Algorithm,
+    compare_algorithms: bool,
+    comparisons: Vec<(Algorithm, Result<Preview, String>)>,
     source: Arc<Document>,
     texture: egui::TextureHandle,
     target: Option<u64>,
@@ -715,6 +719,7 @@ impl Studio {
             fix_palette: self.fix_palette,
             preserve_white_background: true,
             resize: None,
+            algorithm: Algorithm::default(),
         }
     }
 

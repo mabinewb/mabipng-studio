@@ -1,3 +1,4 @@
+use crate::quantization::{self, Algorithm};
 use anyhow::{Context, Result, ensure};
 use encoding_rs::EUC_KR;
 use flate2::{Compression, Decompress, FlushDecompress, Status, write::ZlibEncoder};
@@ -36,6 +37,7 @@ pub enum Mode {
 
 #[derive(Clone)]
 pub struct Settings {
+    pub algorithm: Algorithm,
     pub mode: Mode,
     pub author: Option<String>,
     pub fix_palette: bool,
@@ -46,6 +48,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            algorithm: Algorithm::default(),
             mode: Mode::Auto,
             author: None,
             fix_palette: true,
@@ -693,7 +696,7 @@ fn nearest(color: [u8; 3], palette: &[[u8; 3]]) -> usize {
         .unwrap_or(0)
 }
 
-fn quantize(samples: &[[u8; 3]], count: usize) -> Vec<[u8; 3]> {
+fn quantize(samples: &[[u8; 3]], count: usize, algorithm: Algorithm) -> Result<Vec<[u8; 3]>> {
     let mut unique = Vec::new();
     for &pixel in samples {
         if !unique.contains(&pixel) {
@@ -704,7 +707,10 @@ fn quantize(samples: &[[u8; 3]], count: usize) -> Vec<[u8; 3]> {
         }
     }
     if unique.len() <= count {
-        return unique;
+        return Ok(unique);
+    }
+    if algorithm != Algorithm::NeuQuant {
+        return quantization::generate(samples, count, algorithm);
     }
     let rgba: Vec<_> = samples
         .iter()
@@ -797,7 +803,7 @@ fn quantize(samples: &[[u8; 3]], count: usize) -> Vec<[u8; 3]> {
     }
     palette.sort_unstable();
     palette.dedup();
-    palette
+    Ok(palette)
 }
 
 fn convert(doc: &Document, settings: &Settings) -> Result<Vec<u8>> {
@@ -882,7 +888,11 @@ fn convert(doc: &Document, settings: &Settings) -> Result<Vec<u8>> {
         Vec::new()
     };
     if !samples.is_empty() {
-        palette.extend(quantize(&samples, if preserve { 3 } else { 4 }));
+        palette.extend(quantize(
+            &samples,
+            if preserve { 3 } else { 4 },
+            settings.algorithm,
+        )?);
     }
     ensure!(
         !palette.is_empty(),

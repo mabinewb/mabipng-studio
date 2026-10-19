@@ -1,9 +1,55 @@
 use super::*;
 
 impl FrameDialog {
+    fn render_with_algorithm(&self, algorithm: Algorithm) -> anyhow::Result<Document> {
+        self.frame.render(
+            &self.source,
+            self.mode,
+            &Settings {
+                mode: Mode::Convert,
+                author: Some("Test".into()),
+                fix_palette: self.fix_palette,
+                preserve_white_background: self.preserve_white,
+                resize: None,
+                algorithm,
+            },
+        )
+    }
+
+    pub(super) fn rebuild_comparisons(&mut self, ctx: &egui::Context) {
+        self.comparisons = Algorithm::ALL
+            .into_iter()
+            .map(|algorithm| {
+                let result = self
+                    .render_with_algorithm(algorithm)
+                    .map(|doc| Preview {
+                        texture: texture(ctx, &format!("algorithm-{algorithm:?}"), &doc.image),
+                        doc,
+                    })
+                    .map_err(|error| error.to_string());
+                (algorithm, result)
+            })
+            .collect();
+    }
+
     fn render(&self, preview: bool) -> anyhow::Result<Document> {
+        if !preview
+            && !self.dirty
+            && let Some(result) = &self.preview
+        {
+            return Document::from_bytes(engine::process(
+                &result.doc,
+                &Settings {
+                    mode: Mode::Author,
+                    author: Some(self.author.clone()),
+                    fix_palette: false,
+                    ..Default::default()
+                },
+            )?);
+        }
         let author = if preview { "Test" } else { &self.author };
         let settings = Settings {
+            algorithm: self.algorithm,
             mode: Mode::Convert,
             author: Some(author.into()),
             fix_palette: self.fix_palette,
@@ -117,6 +163,9 @@ impl Studio {
             frame.center(source.image.dimensions());
         }
         self.frame_dialog = Some(FrameDialog {
+            algorithm: Algorithm::default(),
+            compare_algorithms: true,
+            comparisons: Vec::new(),
             texture: texture(ctx, "framing-source", &source.image),
             mode: if source.is_chat() {
                 PaletteMode::Keep
@@ -322,7 +371,7 @@ impl Studio {
                         ui.vertical(|ui| {
                             ui.set_width(width - 284.0);
                             section(ui, Lucide::Crop, "이미지 영역");
-                            frame_view(ui, dialog, 270.0);
+                            frame_view(ui, dialog, if dialog.compare_algorithms { 160.0 } else { 270.0 });
                             ui.label(
                                 RichText::new(format!(
                                     "원본 {} × {}",
@@ -351,8 +400,14 @@ impl Studio {
                                         dialog.preview = None;
                                     }
                                 }
+                                if dialog.compare_algorithms && dialog.mode == PaletteMode::Adaptive {
+                                    dialog.rebuild_comparisons(ctx);
+                                } else {
+                                    dialog.comparisons.clear();
+                                }
                                 dialog.dirty = false;
                             }
+                            if !dialog.compare_algorithms || dialog.mode != PaletteMode::Adaptive {
                             preview_surface(
                                 ui,
                                 "출력",
@@ -362,6 +417,7 @@ impl Studio {
                                 false,
                                 None,
                             );
+                            }
                             if let Some(preview) = &dialog.preview {
                                 match engine::validate_game_size(&preview.doc) {
                                     Ok(colors) => {
@@ -374,6 +430,45 @@ impl Studio {
                                     Err(error) => {
                                         ui.colored_label(RED, error.to_string());
                                     }
+                                }
+                            }
+                            if dialog.compare_algorithms && dialog.mode == PaletteMode::Adaptive {
+                                let mut chosen = None;
+                                for row in dialog.comparisons.chunks(2) {
+                                    ui.columns(2, |columns| {
+                                        for (column, (algorithm, result)) in columns.iter_mut().zip(row) {
+                                            if column.radio(dialog.algorithm == *algorithm, algorithm.label()).clicked() {
+                                                chosen = Some(*algorithm);
+                                            }
+                                            match result {
+                                                Ok(preview) => {
+                                                    let size = preview.texture.size_vec2();
+                                                    let factor = (column.available_width() / size.x).min(72.0 / size.y);
+                                                    if column.add(egui::Image::new(&preview.texture)
+                                                        .fit_to_exact_size(size * factor)
+                                                        .texture_options(egui::TextureOptions::NEAREST)
+                                                        .sense(egui::Sense::click())).clicked() {
+                                                        chosen = Some(*algorithm);
+                                                    }
+                                                    if let Err(error) = engine::validate_game_size(&preview.doc) {
+                                                        column.colored_label(RED, error.to_string());
+                                                    }
+                                                }
+                                                Err(error) => { column.colored_label(RED, error); }
+                                            }
+                                        }
+                                    });
+                                }
+                                if let Some(algorithm) = chosen {
+                                    dialog.algorithm = algorithm;
+                                    if let Some((_, Ok(result))) = dialog.comparisons.iter().find(|(a,_)| *a == algorithm) {
+                                        dialog.preview = Some(Preview {
+                                            texture: result.texture.clone(),
+                                            doc: Document::from_bytes(result.doc.bytes.clone()).expect("validated comparison PNG"),
+                                        });
+                                        dialog.dirty = false;
+                                    } else { dialog.dirty = true; }
+                                    ctx.request_repaint();
                                 }
                             }
                         });
@@ -492,6 +587,19 @@ impl Studio {
                                 dialog.frame.sampling = Sampling::Nearest;
                             }
                             let mut options_changed = old_mode != dialog.mode;
+                            ui.add_enabled_ui(dialog.mode == PaletteMode::Adaptive, |ui| {
+                                let before = dialog.algorithm;
+                                egui::ComboBox::from_id_salt("framing-algorithm")
+                                    .selected_text(dialog.algorithm.label())
+                                    .width(236.0)
+                                    .show_ui(ui, |ui| {
+                                        for algorithm in Algorithm::ALL {
+                                            ui.selectable_value(&mut dialog.algorithm, algorithm, algorithm.label());
+                                        }
+                                    });
+                                options_changed |= before != dialog.algorithm;
+                                options_changed |= ui.checkbox(&mut dialog.compare_algorithms, "알고리즘 비교 미리보기").changed();
+                            });
                             ui.add_enabled_ui(dialog.mode != PaletteMode::Keep, |ui| {
                                 egui::ComboBox::from_id_salt("framing-sampling")
                                     .selected_text(match dialog.frame.sampling {
